@@ -1,0 +1,13 @@
+# Binaries
+operator
+opr
+
+# Go build artifacts
+*.o
+*.a
+*.so
+
+# Architecture specific binaries
+*.exe
+*.test
+*.prof
