@@ -19,6 +19,7 @@ var sendCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) < 2 {
 			HandleError(fmt.Errorf("%w: session name and payload are required", tmux.ErrValidation))
+			return
 		}
 
 		name := strings.TrimSpace(args[0])
@@ -28,6 +29,7 @@ var sendCmd = &cobra.Command{
 		err := client.SendKeys(cmd.Context(), name, payload, enter, sendRaw)
 		if err != nil {
 			HandleError(err)
+			return
 		}
 
 		if jsonFlag {

@@ -3,7 +3,9 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/EstebanForge/operator/pkg/tmux"
@@ -20,10 +22,13 @@ func runFieldWithEsc(ctx context.Context, field huh.Field) error {
 		key.WithKeys("esc", "ctrl+c"),
 		key.WithHelp("esc", "back/exit"),
 	)
-	return huh.NewForm(huh.NewGroup(field)).
+	form := huh.NewForm(huh.NewGroup(field)).
 		WithShowHelp(false).
-		WithKeyMap(km).
-		RunWithContext(ctx)
+		WithKeyMap(km)
+	if jsonFlag {
+		form = form.WithOutput(os.Stderr)
+	}
+	return form.RunWithContext(ctx)
 }
 
 // RunTUI launches the interactive menu loop.
@@ -117,6 +122,10 @@ func RunTUI(ctx context.Context, c tmux.Client) error {
 			sanitized := tmux.SanitizeSessionName(name)
 			_, err = c.NewSession(ctx, sanitized, "", "", !attachNow)
 			if err != nil {
+				if errors.Is(err, tmux.ErrSessionExited) {
+					// User attached and exited tmux normally
+					continue
+				}
 				fmt.Printf("Error creating session: %s\n", err)
 				continue
 			}

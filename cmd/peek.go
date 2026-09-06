@@ -24,14 +24,17 @@ var peekCmd = &cobra.Command{
 		if name == "" {
 			if !isTerminal() {
 				HandleError(fmt.Errorf("%w: session name required in non-interactive mode", tmux.ErrValidation))
+				return
 			}
 
 			sessions, err := client.ListSessions(cmd.Context())
 			if err != nil {
 				HandleError(err)
+				return
 			}
 			if len(sessions) == 0 {
 				HandleError(fmt.Errorf("%w: no active tmux sessions", tmux.ErrNotFound))
+				return
 			}
 
 			options := make([]huh.Option[string], 0, len(sessions))
@@ -49,12 +52,14 @@ var peekCmd = &cobra.Command{
 					return
 				}
 				HandleError(err)
+				return
 			}
 		}
 
 		output, err := client.CapturePane(cmd.Context(), name, peekLines)
 		if err != nil {
 			HandleError(err)
+			return
 		}
 
 		if jsonFlag {

@@ -3,17 +3,19 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/EstebanForge/operator/internal/constants"
 	"github.com/EstebanForge/operator/pkg/tmux"
-	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
 var (
 	jsonFlag bool
 	client   tmux.Client = tmux.NewOSClient()
+
+	isTerminal = tmux.IsTerminal
 
 	rootCmd = &cobra.Command{
 		Use:     "operator",
@@ -24,7 +26,8 @@ var (
 				cmd.SetOut(os.Stderr)
 				cmd.SetErr(os.Stderr)
 				_ = cmd.Usage() //nolint:errcheck // best-effort usage print
-				os.Exit(ExitValidation)
+				osExit(ExitValidation)
+				return
 			}
 
 			if err := RunTUI(cmd.Context(), client); err != nil {
@@ -40,14 +43,12 @@ func init() {
 	rootCmd.SilenceErrors = true
 }
 
-func isTerminal() bool {
-	return (isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())) &&
-		(isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd()))
-}
-
 // Execute executes the root command.
 func Execute() {
 	if err := rootCmd.ExecuteContext(context.Background()); err != nil {
+		if ResolveExitCode(err) == ExitDaemon {
+			err = fmt.Errorf("%w: %w", tmux.ErrValidation, err)
+		}
 		HandleError(err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 )
 
 func TestDetectInstallInfo(t *testing.T) {
+	t.Parallel()
 	info := DetectInstallInfo()
 	if info.Platform == "" {
 		t.Errorf("expected platform to be populated")
@@ -19,6 +20,7 @@ func TestDetectInstallInfo(t *testing.T) {
 }
 
 func TestMissingTmuxPrompt(t *testing.T) {
+	t.Parallel()
 	prompt := MissingTmuxPrompt()
 	if !strings.Contains(prompt, "Error: tmux binary not found in PATH") {
 		t.Errorf("expected error title in prompt")

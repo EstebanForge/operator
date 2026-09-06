@@ -19,6 +19,11 @@ var killCmd = &cobra.Command{
 	Use:   "kill [name]",
 	Short: "Kill a tmux session or all sessions",
 	Run: func(cmd *cobra.Command, args []string) {
+		if killAll && len(args) > 0 {
+			HandleError(fmt.Errorf("%w: cannot specify session name with --all", tmux.ErrValidation))
+			return
+		}
+
 		var name string
 		if len(args) > 0 {
 			name = strings.TrimSpace(args[0])
@@ -27,14 +32,17 @@ var killCmd = &cobra.Command{
 		if !killAll && name == "" {
 			if !isTerminal() {
 				HandleError(fmt.Errorf("%w: session name or --all required in non-interactive mode", tmux.ErrValidation))
+				return
 			}
 
 			sessions, err := client.ListSessions(cmd.Context())
 			if err != nil {
 				HandleError(err)
+				return
 			}
 			if len(sessions) == 0 {
 				HandleError(fmt.Errorf("%w: no active tmux sessions", tmux.ErrNotFound))
+				return
 			}
 
 			options := make([]huh.Option[string], 0, len(sessions))
@@ -52,11 +60,12 @@ var killCmd = &cobra.Command{
 					return
 				}
 				HandleError(err)
+				return
 			}
 		}
 
 		// Prompt confirmation in interactive mode unless --force is given
-		if isTerminal() && !killForce && !jsonFlag {
+		if isTerminal() && !killForce {
 			targetDesc := fmt.Sprintf("session '%s'", name)
 			if killAll {
 				targetDesc = "ALL tmux sessions and server"
@@ -71,8 +80,17 @@ var killCmd = &cobra.Command{
 					return
 				}
 				HandleError(err)
+				return
 			}
 			if !confirm {
+				if jsonFlag {
+					resp := map[string]any{
+						"status": "canceled",
+						"action": "kill",
+					}
+					_ = OutputJSON(resp)
+					return
+				}
 				fmt.Println("Canceled.")
 				return
 			}
@@ -81,6 +99,7 @@ var killCmd = &cobra.Command{
 		err := client.Kill(cmd.Context(), name, killAll)
 		if err != nil {
 			HandleError(err)
+			return
 		}
 
 		targetName := name

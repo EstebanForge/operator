@@ -7,15 +7,20 @@ import (
 )
 
 func TestDictionarySizeAndSanity(t *testing.T) {
-	if len(EnglishWords) != 500 {
-		t.Fatalf("expected 500 English words, got %d", len(EnglishWords))
+	t.Parallel()
+
+	enWords := EnglishWords()
+	esWords := SpanishWords()
+
+	if len(enWords) != 500 {
+		t.Fatalf("expected 500 English words, got %d", len(enWords))
 	}
-	if len(SpanishWords) != 500 {
-		t.Fatalf("expected 500 Spanish words, got %d", len(SpanishWords))
+	if len(esWords) != 500 {
+		t.Fatalf("expected 500 Spanish words, got %d", len(esWords))
 	}
 
 	enSeen := make(map[string]bool)
-	for _, w := range EnglishWords {
+	for _, w := range enWords {
 		if enSeen[w] {
 			t.Errorf("duplicate English word: %s", w)
 		}
@@ -26,7 +31,7 @@ func TestDictionarySizeAndSanity(t *testing.T) {
 	}
 
 	esSeen := make(map[string]bool)
-	for _, w := range SpanishWords {
+	for _, w := range esWords {
 		if esSeen[w] {
 			t.Errorf("duplicate Spanish word: %s", w)
 		}
@@ -38,6 +43,7 @@ func TestDictionarySizeAndSanity(t *testing.T) {
 }
 
 func TestGenerateSessionName(t *testing.T) {
+	t.Parallel()
 	for range 20 {
 		name := GenerateSessionName()
 		parts := strings.Split(name, "-")

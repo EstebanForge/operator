@@ -21,15 +21,18 @@ var joinCmd = &cobra.Command{
 
 		if !isTerminal() {
 			HandleError(fmt.Errorf("%w: attach requires an interactive terminal", tmux.ErrNotATTY))
+			return
 		}
 
 		if name == "" {
 			sessions, err := client.ListSessions(cmd.Context())
 			if err != nil {
 				HandleError(err)
+				return
 			}
 			if len(sessions) == 0 {
 				HandleError(fmt.Errorf("%w: no active tmux sessions", tmux.ErrNotFound))
+				return
 			}
 
 			options := make([]huh.Option[string], 0, len(sessions))
@@ -47,11 +50,13 @@ var joinCmd = &cobra.Command{
 					return
 				}
 				HandleError(err)
+				return
 			}
 		}
 
 		if err := client.Attach(cmd.Context(), name); err != nil {
 			HandleError(err)
+			return
 		}
 	},
 }

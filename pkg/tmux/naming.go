@@ -6,11 +6,11 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 )
 
-// EnglishWords contains 500 curated English words for session naming.
-var EnglishWords = []string{
+var englishWords = []string{
 	"acorn", "alder", "amber", "anchor", "ant", "anvil", "apex", "arc", "arch", "armor",
 	"arrow", "ash", "aspen", "atlas", "aurora", "axis", "badge", "badger", "bamboo", "banner",
 	"basalt", "bastion", "battery", "bay", "beacon", "beam", "bear", "beaver", "beech", "beetle",
@@ -63,8 +63,7 @@ var EnglishWords = []string{
 	"ship", "shore", "shower", "shuttle", "signal", "silver", "siren", "skiff", "sky", "slab",
 }
 
-// SpanishWords contains 500 curated Spanish words for session naming.
-var SpanishWords = []string{
+var spanishWords = []string{
 	"abaco", "abeja", "abismo", "acantilado", "adelfa", "aguila", "aire", "alambre", "alameda", "alarma",
 	"alba", "albedo", "alborada", "alcazar", "alce", "alcor", "aldea", "alea", "aleacion", "alfiler",
 	"alga", "algoritmo", "alicate", "alisio", "aliso", "almena", "alondra", "altavoz", "altiplano", "aluminio",
@@ -121,18 +120,28 @@ var combinedWordPool []string
 
 func init() {
 	seen := make(map[string]bool)
-	for _, w := range EnglishWords {
+	for _, w := range englishWords {
 		if !seen[w] {
 			seen[w] = true
 			combinedWordPool = append(combinedWordPool, w)
 		}
 	}
-	for _, w := range SpanishWords {
+	for _, w := range spanishWords {
 		if !seen[w] {
 			seen[w] = true
 			combinedWordPool = append(combinedWordPool, w)
 		}
 	}
+}
+
+// EnglishWords returns a copy of the curated English word list.
+func EnglishWords() []string {
+	return slices.Clone(englishWords)
+}
+
+// SpanishWords returns a copy of the curated Spanish word list.
+func SpanishWords() []string {
+	return slices.Clone(spanishWords)
 }
 
 // GenerateSessionName generates a 3-word random session name combining English and Spanish words.

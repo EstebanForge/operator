@@ -10,7 +10,7 @@ It serves two targets:
 
 - Linux or macOS
 - `tmux` (installed and available in `$PATH`)
-- Go 1.22 or newer (to compile from source)
+- Go 1.24 or newer (to compile from source)
 
 ## Installation & Build
 

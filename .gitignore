@@ -11,3 +11,5 @@ opr
 *.exe
 *.test
 *.prof
+*.out
+bin/

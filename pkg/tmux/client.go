@@ -28,6 +28,8 @@ var (
 	ErrNotATTY = errors.New("terminal required for attach")
 	// ErrTmuxMissing indicates the tmux executable was not found in PATH.
 	ErrTmuxMissing = errors.New("tmux binary not found in PATH")
+	// ErrSessionExited indicates an interactive session was terminated upon exiting tmux.
+	ErrSessionExited = fmt.Errorf("%w: session exited", ErrNotFound)
 )
 
 // Session represents a running tmux session.
@@ -211,7 +213,7 @@ func (c *OSClient) NewSession(ctx context.Context, name, dir, cmdStr string, det
 			return nil, fmt.Errorf("failed to create session: %w", err)
 		}
 	} else {
-		if !isTerminal() {
+		if !IsTerminal() {
 			return nil, ErrNotATTY
 		}
 		if err := c.ensureTmuxPath(); err != nil {
@@ -233,17 +235,30 @@ func (c *OSClient) NewSession(ctx context.Context, name, dir, cmdStr string, det
 		}
 	}
 
+	if !detached {
+		// An interactive session that is no longer listed has terminated/exited.
+		return nil, fmt.Errorf("%w: session '%s' exited", ErrSessionExited, sanitized)
+	}
+
+	// Detached session fallback check
+	exists, hErr := c.HasSession(ctx, sanitized)
+	if hErr == nil && !exists {
+		return nil, fmt.Errorf("%w: session '%s' could not be found after creation", ErrNotFound, sanitized)
+	}
+
 	return &Session{
 		Name:       sanitized,
 		Windows:    1,
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		IsAttached: !detached,
+		IsAttached: false,
 		Path:       dir,
 	}, nil
 }
 
-func isTerminal() bool {
-	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
+// IsTerminal returns true if both stdin and stdout are interactive terminals.
+func IsTerminal() bool {
+	return (isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())) &&
+		(isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd()))
 }
 
 // Attach attaches to a session or switches client if already inside tmux.
@@ -261,7 +276,7 @@ func (c *OSClient) Attach(ctx context.Context, name string) error {
 		return err
 	}
 
-	if !isTerminal() {
+	if !IsTerminal() {
 		return ErrNotATTY
 	}
 

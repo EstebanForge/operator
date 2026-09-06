@@ -117,6 +117,7 @@ func (m *mockTmuxClient) Doctor(_ context.Context) (*tmux.DoctorResult, error) {
 }
 
 func TestResolveExitCode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -175,6 +176,7 @@ func TestCommandsWithMockClient(t *testing.T) {
 
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(r)
+		_ = r.Close()
 
 		var sessions []tmux.Session
 		if err := json.Unmarshal(buf.Bytes(), &sessions); err != nil {
@@ -200,6 +202,7 @@ func TestCommandsWithMockClient(t *testing.T) {
 
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(r)
+		_ = r.Close()
 
 		var res tmux.DoctorResult
 		if err := json.Unmarshal(buf.Bytes(), &res); err != nil {
@@ -233,6 +236,7 @@ func TestCommandsWithMockClient(t *testing.T) {
 
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(r)
+		_ = r.Close()
 
 		var res tmux.DoctorResult
 		if err := json.Unmarshal(buf.Bytes(), &res); err != nil {
@@ -259,6 +263,7 @@ func TestCommandsWithMockClient(t *testing.T) {
 
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(r)
+		_ = r.Close()
 
 		var res map[string]any
 		if err := json.Unmarshal(buf.Bytes(), &res); err != nil {
@@ -308,6 +313,7 @@ func TestCommandsWithMockClient(t *testing.T) {
 
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(r)
+		_ = r.Close()
 
 		var res map[string]any
 		if err := json.Unmarshal(buf.Bytes(), &res); err != nil {
@@ -323,6 +329,110 @@ func TestCommandsWithMockClient(t *testing.T) {
 		parts := strings.Split(sessName, "-")
 		if len(parts) < 3 {
 			t.Errorf("expected at least 3 words in auto-generated session name, got: %s", sessName)
+		}
+	})
+}
+
+func TestCommandErrorHandling(t *testing.T) {
+	origOsExit := osExit
+	origClient := client
+	origIsTerm := isTerminal
+	origJsonFlag := jsonFlag
+	defer func() {
+		osExit = origOsExit
+		client = origClient
+		isTerminal = origIsTerm
+		jsonFlag = origJsonFlag
+	}()
+
+	mock := &mockTmuxClient{
+		sessions: []tmux.Session{{Name: "worker-1"}},
+	}
+	SetClient(mock)
+	isTerminal = func() bool { return false } // non-interactive mode
+
+	var lastCode int
+	osExit = func(code int) {
+		lastCode = code
+	}
+
+	t.Run("kill --all with session name fails validation", func(t *testing.T) {
+		lastCode = -1
+		killAll = true
+		defer func() { killAll = false }()
+
+		killCmd.Run(killCmd, []string{"worker-1"})
+		if lastCode != ExitValidation {
+			t.Errorf("expected exit code %d, got %d", ExitValidation, lastCode)
+		}
+	})
+
+	t.Run("kill without name or --all in non-interactive mode fails validation", func(t *testing.T) {
+		lastCode = -1
+		killAll = false
+
+		killCmd.Run(killCmd, []string{})
+		if lastCode != ExitValidation {
+			t.Errorf("expected exit code %d, got %d", ExitValidation, lastCode)
+		}
+	})
+
+	t.Run("new interactive without detached in non-interactive terminal fails validation", func(t *testing.T) {
+		lastCode = -1
+		newDetached = false
+
+		newCmd.Run(newCmd, []string{"my-new-session"})
+		if lastCode != ExitValidation {
+			t.Errorf("expected exit code %d, got %d", ExitValidation, lastCode)
+		}
+	})
+
+	t.Run("new with invalid empty sanitized name fails validation", func(t *testing.T) {
+		lastCode = -1
+		newDetached = true
+		defer func() { newDetached = false }()
+
+		newCmd.Run(newCmd, []string{"!@#$%^&*()"})
+		if lastCode != ExitValidation {
+			t.Errorf("expected exit code %d, got %d", ExitValidation, lastCode)
+		}
+	})
+
+	t.Run("HandleError in JSON mode prints JSON error contract", func(t *testing.T) {
+		jsonFlag = true
+		defer func() { jsonFlag = false }()
+
+		r, w, _ := os.Pipe()
+		oldStderr := os.Stderr
+		os.Stderr = w
+
+		lastCode = -1
+		HandleError(tmux.ErrNotFound)
+
+		_ = w.Close()
+		os.Stderr = oldStderr
+
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(r)
+		_ = r.Close()
+
+		var resp ErrorResponse
+		if err := json.Unmarshal(buf.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to parse JSON error: %v, got: %s", err, buf.String())
+		}
+		if resp.Status != "error" || resp.Code != ExitNotFound {
+			t.Errorf("unexpected error response: %+v", resp)
+		}
+		if lastCode != ExitNotFound {
+			t.Errorf("expected exit code %d, got %d", ExitNotFound, lastCode)
+		}
+	})
+
+	t.Run("HandleError with nil exits 0", func(t *testing.T) {
+		lastCode = -1
+		HandleError(nil)
+		if lastCode != ExitSuccess {
+			t.Errorf("expected exit code %d, got %d", ExitSuccess, lastCode)
 		}
 	})
 }

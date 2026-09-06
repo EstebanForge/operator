@@ -25,10 +25,13 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
+var osExit = os.Exit
+
 // HandleError formats and prints the error and terminates execution with the appropriate exit code.
 func HandleError(err error) {
 	if err == nil {
-		os.Exit(ExitSuccess)
+		osExit(ExitSuccess)
+		return
 	}
 
 	code := ResolveExitCode(err)
@@ -51,7 +54,8 @@ func HandleError(err error) {
 		} else {
 			fmt.Fprintln(os.Stderr, tmux.MissingTmuxPrompt())
 		}
-		os.Exit(code)
+		osExit(code)
+		return
 	}
 
 	if jsonFlag {
@@ -70,7 +74,7 @@ func HandleError(err error) {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", msg)
 	}
 
-	os.Exit(code)
+	osExit(code)
 }
 
 // ResolveExitCode maps known errors to their corresponding exit codes.

@@ -56,11 +56,21 @@ var newCmd = &cobra.Command{
 		sanitized := tmux.SanitizeSessionName(name)
 		if sanitized == "" {
 			HandleError(fmt.Errorf("%w: invalid session name", tmux.ErrValidation))
+			return
+		}
+
+		if !newDetached && !isTerminal() {
+			HandleError(tmux.ErrNotATTY)
+			return
 		}
 
 		sess, err := client.NewSession(cmd.Context(), sanitized, newDir, newCmdStr, newDetached)
 		if err != nil {
+			if !newDetached && !jsonFlag && errors.Is(err, tmux.ErrSessionExited) {
+				return
+			}
 			HandleError(err)
+			return
 		}
 
 		if jsonFlag {

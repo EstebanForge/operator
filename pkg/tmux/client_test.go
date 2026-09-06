@@ -6,6 +6,7 @@ import (
 )
 
 func TestSanitizeSessionName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -49,6 +50,7 @@ func TestSanitizeSessionName(t *testing.T) {
 }
 
 func TestParseSessionList(t *testing.T) {
+	t.Parallel()
 	t.Run("empty output", func(t *testing.T) {
 		got := ParseSessionList("")
 		if len(got) != 0 {
