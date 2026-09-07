@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.0] - 2026-09-07
 
+<!-- RELEASE:START 0.1.0 -->
+
 First public beta. Single-binary session multiplexer and orchestrator on top
 of native `tmux`, with a human TUI and an agent-facing machine contract.
 
@@ -41,3 +43,5 @@ of native `tmux`, with a human TUI and an agent-facing machine contract.
   alphanumeric/dash/underscore stripped).
 - Setup never writes to shell rc files; it prints manual instructions when
   it cannot symlink.
+
+<!-- RELEASE:END 0.1.0 -->
