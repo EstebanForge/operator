@@ -4,6 +4,31 @@ All notable changes to `operator` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-09-07
+
+<!-- RELEASE:START 0.1.1 -->
+
+Fixes the Homebrew install flow found in 0.1.0.
+
+### Fixed
+
+- `operator setup` no longer drops the `opr` alias inside Homebrew's
+  Cellar (off `$PATH`, dead after `brew upgrade`). The alias now lands
+  beside the invoked binary, and the manual-alias fallback references
+  the invoked path.
+- The Homebrew formula installs the `opr` alias itself through
+  `bin.install_symlink` (tap-side change, already live).
+
+### Upgrade notes (0.1.0 → 0.1.1)
+
+Upgrading heals both known issues automatically: removing the old keg
+deletes any stray Cellar alias, and the upgrade's install step creates
+the missing `$PATH` alias. If `brew upgrade` reports an `opr` conflict,
+a file named `opr` exists in Homebrew's bin directory and came from
+something else; remove that file and rerun the upgrade.
+
+<!-- RELEASE:END 0.1.1 -->
+
 ## [0.1.0] - 2026-09-07
 
 <!-- RELEASE:START 0.1.0 -->
