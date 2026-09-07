@@ -148,9 +148,8 @@ func (c *OSClient) run(ctx context.Context, args ...string) ([]byte, error) {
 // ParseSessionList parses the tab-delimited tmux list-sessions output.
 // Trims only line endings: a trailing tab is significant (empty pane path).
 func ParseSessionList(output string) []Session {
-	lines := strings.Split(strings.TrimRight(output, "\r\n"), "\n")
-	sessions := make([]Session, 0, len(lines))
-	for _, line := range lines {
+	sessions := make([]Session, 0, strings.Count(output, "\n"))
+	for line := range strings.SplitSeq(strings.TrimRight(output, "\r\n"), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue

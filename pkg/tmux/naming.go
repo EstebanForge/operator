@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"slices"
 	"strings"
+	"sync"
 )
 
 var englishWords = []string{
@@ -116,23 +117,24 @@ var spanishWords = []string{
 	"playa", "plomo", "polea", "poligono", "polo", "polvo", "poniente", "porton", "poste", "potencia",
 }
 
-var combinedWordPool []string
-
-func init() {
-	seen := make(map[string]bool)
+// combinedWordPool lazily builds the deduplicated English + Spanish pool.
+var combinedWordPool = sync.OnceValue(func() []string {
+	seen := make(map[string]struct{}, len(englishWords)+len(spanishWords))
+	pool := make([]string, 0, len(englishWords)+len(spanishWords))
 	for _, w := range englishWords {
-		if !seen[w] {
-			seen[w] = true
-			combinedWordPool = append(combinedWordPool, w)
+		if _, dup := seen[w]; !dup {
+			seen[w] = struct{}{}
+			pool = append(pool, w)
 		}
 	}
 	for _, w := range spanishWords {
-		if !seen[w] {
-			seen[w] = true
-			combinedWordPool = append(combinedWordPool, w)
+		if _, dup := seen[w]; !dup {
+			seen[w] = struct{}{}
+			pool = append(pool, w)
 		}
 	}
-}
+	return pool
+})
 
 // EnglishWords returns a copy of the curated English word list.
 func EnglishWords() []string {
@@ -146,7 +148,8 @@ func SpanishWords() []string {
 
 // GenerateSessionName generates a 3-word random session name combining English and Spanish words.
 func GenerateSessionName() string {
-	n := len(combinedWordPool)
+	pool := combinedWordPool()
+	n := len(pool)
 	if n < 3 {
 		return "session-auto-1"
 	}
@@ -164,7 +167,7 @@ func GenerateSessionName() string {
 		idx := idxBig.Int64()
 		if !chosenIndices[idx] {
 			chosenIndices[idx] = true
-			selected = append(selected, combinedWordPool[idx])
+			selected = append(selected, pool[idx])
 		}
 	}
 

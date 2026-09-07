@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/EstebanForge/operator/pkg/tmux"
@@ -101,10 +102,8 @@ func resolveTabDir(ctx context.Context, session, hintDir, flagDir string) string
 		}
 	}
 	if sessions, err := client.ListSessions(ctx); err == nil {
-		for _, s := range sessions {
-			if s.Name == session && dirOK(s.Path) {
-				return s.Path
-			}
+		if idx := slices.IndexFunc(sessions, func(s tmux.Session) bool { return s.Name == session }); idx >= 0 && dirOK(sessions[idx].Path) {
+			return sessions[idx].Path
 		}
 	}
 	if wd, err := os.Getwd(); err == nil && dirOK(wd) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/EstebanForge/operator/pkg/tmux"
@@ -101,17 +102,11 @@ func tuiSessionMenu(ctx context.Context, c tmux.Client, name string) {
 		if err != nil {
 			return // the root loop surfaces the failure
 		}
-		var s tmux.Session
-		found := false
-		for _, cur := range sessions {
-			if cur.Name == name {
-				s, found = cur, true
-				break
-			}
-		}
-		if !found {
+		idx := slices.IndexFunc(sessions, func(cur tmux.Session) bool { return cur.Name == name })
+		if idx < 0 {
 			return // session gone: refresh the root list
 		}
+		s := sessions[idx]
 
 		var action string
 		err = runField(ctx, huh.NewSelect[string]().

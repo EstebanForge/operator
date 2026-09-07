@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/EstebanForge/operator/internal/constants"
 	"github.com/spf13/cobra"
 )
 
@@ -32,7 +33,7 @@ var setupCmd = &cobra.Command{
 
 		dir := filepath.Dir(realPath)
 		binaryName := filepath.Base(realPath)
-		symlinkPath := filepath.Join(dir, "opr")
+		symlinkPath := filepath.Join(dir, constants.AliasName)
 
 		exists, owned := oprOwnership(symlinkPath, binaryName, realPath)
 		if exists && !owned {

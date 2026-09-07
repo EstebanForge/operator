@@ -473,11 +473,12 @@ func TestPrintSessionExitHint(t *testing.T) {
 	origJSON := jsonFlag
 	defer func() { client = origClient; jsonFlag = origJSON }()
 
+	ctx := t.Context()
 	capture := func() string {
 		r, w, _ := os.Pipe()
 		oldStderr := os.Stderr
 		os.Stderr = w
-		printSessionExitHint(context.Background(), client, "work")
+		printSessionExitHint(ctx, client, "work")
 		_ = w.Close()
 		os.Stderr = oldStderr
 		var buf bytes.Buffer
@@ -624,7 +625,7 @@ func TestResolveTabDir(t *testing.T) {
 	goneDir := filepath.Join(tmp, "gone")
 
 	SetClient(&mockTmuxClient{sessions: []tmux.Session{{Name: "work", Path: sessDir}}})
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if got := resolveTabDir(ctx, "work", sessDir, tmp); got != tmp {
 		t.Errorf("existing flag must win: got %q", got)

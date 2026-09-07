@@ -13,3 +13,9 @@ opr
 *.prof
 *.out
 bin/
+
+# Build output
+dist/
+
+# Agent workspace
+.pi/
