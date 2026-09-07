@@ -82,6 +82,9 @@ func ResolveExitCode(err error) int {
 	if err == nil {
 		return ExitSuccess
 	}
+	if errors.Is(err, errSymlinkConflict) {
+		return ExitConflict
+	}
 	if errors.Is(err, tmux.ErrNotFound) {
 		return ExitNotFound
 	}

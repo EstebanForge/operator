@@ -88,7 +88,9 @@ var killCmd = &cobra.Command{
 						"status": "canceled",
 						"action": "kill",
 					}
-					_ = OutputJSON(resp)
+					if err := OutputJSON(resp); err != nil {
+						HandleError(err)
+					}
 					return
 				}
 				fmt.Println("Canceled.")

@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -269,7 +271,9 @@ func TestCommandsWithMockClient(t *testing.T) {
 		if err := json.Unmarshal(buf.Bytes(), &res); err != nil {
 			t.Fatalf("failed to unmarshal JSON: %s, output was: %s", err, buf.String())
 		}
-		if res["session"] != "backup-worker" || res["lines_captured"].(float64) != 10 {
+		// The mock capture returns two lines while -l requests 10: the contract
+		// reports the actual line count, not the request.
+		if res["session"] != "backup-worker" || res["lines_captured"].(float64) != 2 {
 			t.Errorf("unexpected peek output: %+v", res)
 		}
 	})
@@ -337,12 +341,12 @@ func TestCommandErrorHandling(t *testing.T) {
 	origOsExit := osExit
 	origClient := client
 	origIsTerm := isTerminal
-	origJsonFlag := jsonFlag
+	origJSONFlag := jsonFlag
 	defer func() {
 		osExit = origOsExit
 		client = origClient
 		isTerminal = origIsTerm
-		jsonFlag = origJsonFlag
+		jsonFlag = origJSONFlag
 	}()
 
 	mock := &mockTmuxClient{
@@ -435,4 +439,196 @@ func TestCommandErrorHandling(t *testing.T) {
 			t.Errorf("expected exit code %d, got %d", ExitSuccess, lastCode)
 		}
 	})
+}
+
+func TestOprOwnership(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	foreignFile := filepath.Join(dir, "foreign-file")
+	if err := os.WriteFile(foreignFile, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	foreignLink := filepath.Join(dir, "foreign-link")
+	if err := os.Symlink("/usr/bin/something-else", foreignLink); err != nil {
+		t.Fatal(err)
+	}
+	realBin := filepath.Join(dir, "operator")
+	if err := os.WriteFile(realBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ownedRelative := filepath.Join(dir, "owned-relative")
+	if err := os.Symlink("operator", ownedRelative); err != nil {
+		t.Fatal(err)
+	}
+	ownedAbsolute := filepath.Join(dir, "owned-absolute")
+	if err := os.Symlink(realBin, ownedAbsolute); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		path       string
+		wantExists bool
+		wantOwned  bool
+	}{
+		{"absent entry", filepath.Join(dir, "opr"), false, false},
+		{"foreign regular file", foreignFile, true, false},
+		{"foreign symlink", foreignLink, true, false},
+		{"owned relative symlink", ownedRelative, true, true},
+		{"owned absolute symlink", ownedAbsolute, true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			exists, owned := oprOwnership(tt.path, "operator", realBin)
+			if exists != tt.wantExists || owned != tt.wantOwned {
+				t.Errorf("oprOwnership(%q) = (%v, %v); want (%v, %v)", tt.path, exists, owned, tt.wantExists, tt.wantOwned)
+			}
+		})
+	}
+}
+
+// runSetupWithFakeBinary points osExecutable at a fake binary inside a fresh
+// temp dir and returns the dir path.
+func runSetupWithFakeBinary(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "operator")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	osExecutable = func() (string, error) { return fakeBin, nil }
+	return dir
+}
+
+func TestSetupCommandRefusesForeignOpr(t *testing.T) {
+	origExec := osExecutable
+	origOsExit := osExit
+	origJSON := jsonFlag
+	defer func() { osExecutable = origExec; osExit = origOsExit; jsonFlag = origJSON }()
+	dir := runSetupWithFakeBinary(t)
+
+	foreignOpr := filepath.Join(dir, "opr")
+	if err := os.WriteFile(foreignOpr, []byte("keep me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var lastCode int
+	osExit = func(code int) { lastCode = code }
+	jsonFlag = false
+
+	setupCmd.Run(setupCmd, []string{})
+
+	if lastCode != ExitConflict {
+		t.Errorf("expected exit code %d, got %d", ExitConflict, lastCode)
+	}
+	content, err := os.ReadFile(foreignOpr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "keep me" {
+		t.Errorf("foreign opr was modified: %q", content)
+	}
+}
+
+func TestSetupCommandRefreshesOwnedSymlink(t *testing.T) {
+	origExec := osExecutable
+	origOsExit := osExit
+	origJSON := jsonFlag
+	defer func() { osExecutable = origExec; osExit = origOsExit; jsonFlag = origJSON }()
+	dir := runSetupWithFakeBinary(t)
+
+	oprPath := filepath.Join(dir, "opr")
+	if err := os.Symlink("operator", oprPath); err != nil {
+		t.Fatal(err)
+	}
+
+	var lastCode int
+	osExit = func(code int) { lastCode = code }
+	jsonFlag = false
+
+	r, w, _ := os.Pipe()
+	oldStdout := os.Stdout
+	os.Stdout = w
+	setupCmd.Run(setupCmd, []string{})
+	_ = w.Close()
+	os.Stdout = oldStdout
+	_ = r.Close()
+
+	if lastCode != ExitSuccess {
+		t.Errorf("expected exit code %d, got %d", ExitSuccess, lastCode)
+	}
+	link, err := os.Readlink(oprPath)
+	if err != nil {
+		t.Fatalf("expected managed symlink to be recreated: %v", err)
+	}
+	if link != "operator" {
+		t.Errorf("expected symlink target 'operator', got %q", link)
+	}
+}
+
+func TestSendJoinsMultiWordPayload(t *testing.T) {
+	origClient := client
+	origJSON := jsonFlag
+	defer func() { client = origClient; jsonFlag = origJSON }()
+
+	mock := &mockTmuxClient{sessions: []tmux.Session{{Name: "web"}}}
+	SetClient(mock)
+	jsonFlag = true
+
+	r, w, _ := os.Pipe()
+	oldStdout := os.Stdout
+	os.Stdout = w
+	sendCmd.Run(sendCmd, []string{"web", "echo", "hello", "world"})
+	_ = w.Close()
+	os.Stdout = oldStdout
+	_ = r.Close()
+
+	if mock.lastSentPayload != "echo hello world" {
+		t.Errorf("expected joined payload %q, got %q", "echo hello world", mock.lastSentPayload)
+	}
+}
+
+func TestNewExitedSessionIsSuccess(t *testing.T) {
+	origClient := client
+	origTerm := isTerminal
+	origDetached := newDetached
+	origJSON := jsonFlag
+	defer func() {
+		client = origClient
+		isTerminal = origTerm
+		newDetached = origDetached
+		jsonFlag = origJSON
+	}()
+
+	mock := &mockTmuxClient{
+		newErr: fmt.Errorf("%w: session 'run-and-done' exited", tmux.ErrSessionExited),
+	}
+	SetClient(mock)
+	isTerminal = func() bool { return true }
+	newDetached = false
+	jsonFlag = true
+
+	r, w, _ := os.Pipe()
+	oldStdout := os.Stdout
+	os.Stdout = w
+	newCmd.Run(newCmd, []string{"run-and-done"})
+	_ = w.Close()
+	os.Stdout = oldStdout
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	_ = r.Close()
+
+	var res map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &res); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %s, output was: %s", err, buf.String())
+	}
+	if res["status"] != "ok" {
+		t.Errorf("expected status ok, got: %+v", res)
+	}
+	details, ok := res["details"].(map[string]any)
+	if !ok || details["exited"] != true {
+		t.Errorf("expected details.exited true, got: %+v", res["details"])
+	}
 }

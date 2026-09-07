@@ -66,7 +66,23 @@ var newCmd = &cobra.Command{
 
 		sess, err := client.NewSession(cmd.Context(), sanitized, newDir, newCmdStr, newDetached)
 		if err != nil {
-			if !newDetached && !jsonFlag && errors.Is(err, tmux.ErrSessionExited) {
+			if !newDetached && errors.Is(err, tmux.ErrSessionExited) {
+				// The attached session closed normally after use: success, not an error.
+				if jsonFlag {
+					resp := map[string]any{
+						"status":  "ok",
+						"action":  "create",
+						"session": sanitized,
+						"details": map[string]any{
+							"detached":  false,
+							"directory": newDir,
+							"exited":    true,
+						},
+					}
+					if err := OutputJSON(resp); err != nil {
+						HandleError(err)
+					}
+				}
 				return
 			}
 			HandleError(err)

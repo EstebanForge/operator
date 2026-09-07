@@ -46,11 +46,19 @@ func init() {
 // Execute executes the root command.
 func Execute() {
 	if err := rootCmd.ExecuteContext(context.Background()); err != nil {
-		if ResolveExitCode(err) == ExitDaemon {
-			err = fmt.Errorf("%w: %w", tmux.ErrValidation, err)
-		}
-		HandleError(err)
+		HandleError(invokeError(err))
 	}
+}
+
+// invokeError classifies cobra-level failures (unknown flag, bad flag value,
+// unknown command) as validation. Command errors never reach this point:
+// they exit inside HandleError during Run, so anything returned to cobra is
+// an invocation problem, not a daemon failure. The cause leads the message.
+func invokeError(err error) error {
+	if ResolveExitCode(err) == ExitDaemon {
+		return fmt.Errorf("%w: %w", err, tmux.ErrValidation)
+	}
+	return err
 }
 
 // SetClient overrides the client instance (useful for testing).

@@ -44,7 +44,7 @@ It addresses two distinct consumers with equal priority:
 
 - **Status:** Accepted
 - **Context:** The name `operator` has personality but is 8 characters. Modifying shell rc files (`.zshrc`) silently is an anti-pattern.
-- **Decision:** Implement a self-contained command (`operator setup`) that creates a relative/absolute symlink named `opr` directly beside the `operator` binary in `$PATH` (e.g., `~/.local/bin/opr` -> `~/.local/bin/operator`). If filesystem permissions deny symlink creation, print the manual alias command to stderr. Do not write to user dotfiles automatically.
+- **Decision:** Implement a self-contained command (`operator setup`) that creates a relative/absolute symlink named `opr` directly beside the `operator` binary in `$PATH` (e.g., `~/.local/bin/opr` -> `~/.local/bin/operator`). If an `opr` entry already exists and is not a symlink pointing at this binary, refuse with exit code `3` and leave the filesystem untouched. If filesystem permissions deny symlink creation, print the manual alias command to stderr. Do not write to user dotfiles automatically.
 
 ### ADR 005: Safe Delimitation and Terminal Safety
 
@@ -52,10 +52,11 @@ It addresses two distinct consumers with equal priority:
 - **Context:** Parsing `tmux list-sessions` with pipe (`|`) delimiters causes collisions when session names or paths contain pipe characters. Attaching to tmux inside an existing session or from a non-TTY environment fails or corrupts terminal state.
 - **Decision:**
   - Use tab (`\t`) as the field delimiter for `tmux list-sessions`.
+  - Target sessions with exact-match syntax in every client call: `-t =<name>` for session commands, `-t =<name>:` for pane commands (`capture-pane`, `send-keys`). Bare names fall back to tmux unambiguous-prefix matching, so `-t work` would resolve to a session named `worker`.
   - Treat a "no server running" tmux exit status as an empty session list (`[]`), not an error.
   - Format `created_at` timestamps as RFC 3339 (ISO 8601) strings parsed from epoch seconds (`#{session_created}`).
   - Guard `operator join` against non-TTY invocation with exit code `4`.
-  - Detect `$TMUX` on `operator join`: use `switch-client -t <name>` when inside tmux, and `attach-session -t <name> -d` when outside.
+  - Detect `$TMUX` on `operator join`: use `switch-client -t =<name>` when inside tmux, and `attach-session -t =<name> -d` when outside.
   - Send literal keys with `tmux send-keys -l` by default to avoid control code misinterpretation.
 
 ## 3. Command-Line Interface Specification
@@ -64,6 +65,8 @@ It addresses two distinct consumers with equal priority:
 
 - `--json` (bool, default: `false`): Formats command output as JSON.
 - `-h, --help`: Displays help.
+- `--version`: Prints the binary version (cobra builtin).
+- `version`: Subcommand that prints the version; honors `--json` (`{"name":...,"version":...}`).
 
 ### Subcommands & Behaviors
 
@@ -71,13 +74,13 @@ It addresses two distinct consumers with equal priority:
 | ----------- | ------------------ | ------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------- |
 | `[none]`    | None               | Global only                                            | Returns error code `4` + usage if non-TTY.                   | Boots full interactive TUI menu loop.        |
 | `ls`        | None               | `--json`                                               | Returns session list (table or JSON array).                  | Prints formatted status table.               |
-| `new`       | `[name]`           | `-d, --dir <path>`  `-c, --cmd <string>`  `--detached` | Creates session. Auto-generates 3-word bilingual name if omitted. Auto-sanitizes whitespace to `-`. Fails if session exists. | Prompted with default auto-generated name if `<name>` omitted or blank. |
+| `new`       | `[name]`           | `-d, --dir <path>`  `-c, --cmd <string>`  `--detached` | Creates session. Auto-generates 3-word bilingual name if omitted. Auto-sanitizes whitespace to `-`. Fails with exit 3 if session exists. Non-TTY requires `--detached` (exit 4 otherwise). | Prompted with default auto-generated name if `<name>` omitted or blank. |
 | `join`      | `<name>`           | None                                                   | Fails with code `4` if non-TTY or `<name>` omitted. Attaches with `-d` (or switches client if inside `$TMUX`). | Single-select list of sessions if omitted.   |
 | `peek`      | `<name>`           | `-l, --lines <int>` (default 25)  `--json`             | Reads last $N$ lines from active pane via `capture-pane`.    | Displays paginated preview with back option. |
-| `send`      | `<name> <payload>` | `--no-enter` (default false)  `--raw` (default false)  | Injects keys into session via `send-keys`. Defaults to literal text (`-l`); sends raw keys if `--raw`. | Not in TUI menu (agent/script focused).      |
-| `kill`      | `<name>`           | `-a, --all`  `-f, --force`                             | Kills session. Fails if name missing unless `-a` is passed. `-f` skips prompt. | Confirmation modal required unless `-f`.     |
-| `setup`     | None               | None                                                   | Creates `opr` symlink in same directory as executable.       | Prints resolution status and verification.   |
-| `doctor`    | None               | `--json`                                               | Checks `tmux` binary presence, version, and socket access.   | Diagnostic output for troubleshooting.       |
+| `send`      | `<name> <payload>` | `--no-enter` (default false)  `--raw` (default false)  | Injects keys into session via `send-keys`. Payload is every argument after `<name>` joined with single spaces, so quoting is optional. Defaults to literal text (`-l`); sends raw tmux key names if `--raw`. | Not in TUI menu (agent/script focused).      |
+| `kill`      | `<name>`           | `-a, --all`  `-f, --force`                             | Kills session. Fails if name missing unless `-a` is passed. `-a` runs `kill-server` (whole tmux server). Unprompted in non-TTY. | Confirmation modal required unless `-f`.     |
+| `setup`     | None               | None                                                   | Creates `opr` symlink in same directory as executable. Refuses with exit 3 if `opr` exists and is not an operator symlink. | Prints resolution status and verification.   |
+| `doctor`    | None               | `--json`                                               | Checks `tmux` binary presence, version, and server state.    | Diagnostic output for troubleshooting.       |
 
 ## 4. Machine Schemas (JSON Specification)
 
@@ -108,12 +111,19 @@ JSON
   "status": "ok",
   "action": "create|kill|send",
   "session": "backup-worker",
-  "details": {
-    "detached": true,
-    "directory": "/srv/storage"
-  }
+  "details": { ... }
 }
 ```
+
+`details` keys per action:
+
+| Action   | `session` value                                                            | `details` keys                                                                                                   |
+| -------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `create` | Sanitized session name                                                      | `detached` (bool), `directory` (string), `exited` (bool, `true` only when an attached session closed normally)     |
+| `send`   | Target session name                                                         | `payload` (string), `enter` (bool), `raw` (bool)                                                                   |
+| `kill`   | Target name, or the sentinel `"all"` when `-a` kills the whole server       | `all` (bool)                                                                                                       |
+
+A declined interactive kill confirmation returns `{"status":"canceled","action":"kill"}` on stdout with exit code `0`.
 
 ### 4.3. Output Inspection (`operator peek <name> --json`)
 
@@ -127,6 +137,8 @@ JSON
 }
 ```
 
+`lines_captured` is the number of pane lines actually returned. It may be lower than the requested `-l` value when pane history is short.
+
 ### 4.4. Error Object (Sent to `stderr` when `--json` is active)
 
 JSON
@@ -135,17 +147,46 @@ JSON
 {
   "status": "error",
   "code": 2,
-  "message": "session 'worker' not found"
+  "message": "session not found: session 'worker'"
+}
+```
+
+### 4.5. Doctor Result (`operator doctor --json`)
+
+JSON
+
+```
+{
+  "tmux_installed": true,
+  "tmux_path": "/usr/bin/tmux",
+  "tmux_version": "tmux 3.7c",
+  "server_running": true,
+  "install_hint": null
+}
+```
+
+`install_hint` is omitted (JSON `omitempty`) when `tmux_installed` is true.
+
+### 4.6. Setup Result (`operator setup --json`)
+
+JSON
+
+```
+{
+  "status": "ok",
+  "action": "setup",
+  "symlink": "/home/user/.local/bin/opr",
+  "target": "/home/user/.local/bin/operator"
 }
 ```
 
 ## 5. Exit Code Standards
 
-- **`0` (Success):** Operation succeeded.
+- **`0` (Success):** Operation succeeded. Includes declined kill confirmations (`status: "canceled"`) and an attached session that closed normally after use.
 - **`1` (Internal / Daemon Error):** `tmux` execution failed, binary missing, or fatal OS error.
-- **`2` (Not Found / Target Missing):** Target session does not exist.
-- **`3` (Conflict):** Session already exists on `new`.
-- **`4` (Validation / Invocation Error):** Missing required argument in non-interactive mode, invocation of interactive command in non-TTY environment, or invalid characters in session name.
+- **`2` (Not Found / Target Missing):** Target session does not exist. Also used when an interactive picker (`join`, `peek`, `kill`) finds zero sessions.
+- **`3` (Conflict):** Session already exists on `new`, or `setup` found an `opr` entry that is not an operator symlink.
+- **`4` (Validation / Invocation Error):** Missing required argument in non-interactive mode, invocation of an interactive command in a non-TTY environment, `new` without `--detached` in non-TTY, cobra-level invocation failures (unknown flag or command), or a session name that sanitizes to empty. Names with invalid characters are sanitized silently, not rejected.
 
 ## 6. Implementation Plan for Downstream LLM Agent
 
@@ -156,6 +197,7 @@ JSON
    - Use tab-delimited formatted strings: `tmux list-sessions -F "#{session_name}\t#{session_windows}\t#{session_created}\t#{session_attached}\t#{pane_current_path}"`.
    - Parse `#{session_created}` (Unix epoch seconds) to RFC 3339 formatted timestamp.
    - Differentiate "no server running" output from system errors (return empty slice `[]Session` with nil error).
+   - Build all session targets with the `=` exact-match prefix; bare names trigger tmux unambiguous-prefix matching. Session commands use `-t =<name>`; pane commands (`capture-pane`, `send-keys`) use `-t =<name>:`.
    - Implement wrappers: `ListSessions()`, `NewSession()`, `Attach()`, `Kill()`, `CapturePane()`, `SendKeys()`.
    - Implement `$TMUX` detection in `Attach()`: use `switch-client` if inside tmux, `attach-session -d` if outside. Enforce TTY check.
    - Implement `SendKeys()`: default to literal text (`-l`), support raw keycode injection via option.
@@ -182,6 +224,7 @@ JSON
    - Detect binary path using `os.Executable()`.
    - Resolve symlinks to find the real directory.
    - Create symbolic link `opr -> operator` in that folder.
+   - Refuse with exit code 3 if `opr` exists and is not a symlink pointing at this binary.
    - If permission denied, print manual alias configuration instructions to stderr without modifying shell rc files.
 
 ### Phase 5: Verification & Testing Checklist
@@ -191,3 +234,7 @@ JSON
 - Test pipe-in failure: `echo "foo" | operator` prints usage to stderr, returns exit code 4, and does not hang.
 - Test `opr` symlink creation and execution parity with `operator`.
 - Test client switching when `$TMUX` is present vs detaching remote client when `$TMUX` is absent on `operator join`.
+- Test exact-match targeting: with session `worker` alive, `operator kill work` must fail with exit code 2 (no prefix collision).
+- Test unquoted multi-word send: `operator send web echo hello world` delivers `echo hello world` as one payload.
+- Test `setup` with a foreign `opr` file present: exits 3, file untouched.
+- Test attached `new` whose session closes normally: exit code 0, JSON `details.exited` is `true`.

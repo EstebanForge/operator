@@ -49,6 +49,16 @@ func TestSanitizeSessionName(t *testing.T) {
 	}
 }
 
+func TestSessionTarget(t *testing.T) {
+	t.Parallel()
+	if got := sessionTarget("work"); got != "=work" {
+		t.Errorf("sessionTarget(%q) = %q; want %q", "work", got, "=work")
+	}
+	if got := paneTarget("work"); got != "=work:" {
+		t.Errorf("paneTarget(%q) = %q; want %q", "work", got, "=work:")
+	}
+}
+
 func TestParseSessionList(t *testing.T) {
 	t.Parallel()
 	t.Run("empty output", func(t *testing.T) {

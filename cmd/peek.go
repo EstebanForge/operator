@@ -65,7 +65,7 @@ var peekCmd = &cobra.Command{
 		if jsonFlag {
 			resp := map[string]any{
 				"session":        name,
-				"lines_captured": peekLines,
+				"lines_captured": countLines(output),
 				"output":         output,
 			}
 			if err := OutputJSON(resp); err != nil {
@@ -76,6 +76,16 @@ var peekCmd = &cobra.Command{
 
 		fmt.Print(output)
 	},
+}
+
+// countLines reports the number of pane lines in a capture-pane -p payload.
+// It may be lower than the requested -l value when the pane history is short.
+func countLines(output string) int {
+	trimmed := strings.TrimRight(output, "\n")
+	if trimmed == "" {
+		return 0
+	}
+	return strings.Count(trimmed, "\n") + 1
 }
 
 func init() {

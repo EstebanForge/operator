@@ -23,7 +23,8 @@ var sendCmd = &cobra.Command{
 		}
 
 		name := strings.TrimSpace(args[0])
-		payload := args[1]
+		// Join all remaining words so an unquoted multi-word payload is not truncated.
+		payload := strings.Join(args[1:], " ")
 		enter := !sendNoEnter
 
 		err := client.SendKeys(cmd.Context(), name, payload, enter, sendRaw)

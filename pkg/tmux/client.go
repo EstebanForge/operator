@@ -73,6 +73,20 @@ func NewOSClient() *OSClient {
 	return &OSClient{tmuxPath: path}
 }
 
+// sessionTarget prefixes a session name with '=' so tmux matches it exactly.
+// Bare names fall back to unambiguous-prefix matching, so '-t work' would
+// resolve to 'worker' and kill the wrong session.
+func sessionTarget(name string) string {
+	return "=" + name
+}
+
+// paneTarget targets the active pane of a session exactly. Pane commands
+// (capture-pane, send-keys) reject a bare '=name' as a pane target, so the
+// trailing colon scopes the empty window/pane part to the exact session.
+func paneTarget(name string) string {
+	return "=" + name + ":"
+}
+
 // SanitizeSessionName converts whitespace to '-' and removes characters that are not ASCII alphanumeric, dash, or underscore.
 func SanitizeSessionName(name string) string {
 	var sb strings.Builder
@@ -168,12 +182,15 @@ func (c *OSClient) ListSessions(ctx context.Context) ([]Session, error) {
 
 // HasSession checks if a session exists.
 func (c *OSClient) HasSession(ctx context.Context, name string) (bool, error) {
-	_, err := c.run(ctx, "has-session", "-t", name)
+	_, err := c.run(ctx, "has-session", "-t", sessionTarget(name))
 	if err != nil {
 		errMsg := err.Error()
+		// Mirror ListSessions: a dead or absent server means the session
+		// cannot exist, which is not an error (ADR 005).
 		if strings.Contains(errMsg, "can't find session") ||
 			strings.Contains(errMsg, "no server running") ||
-			strings.Contains(errMsg, "no sessions") {
+			strings.Contains(errMsg, "no sessions") ||
+			strings.Contains(errMsg, "error connecting to") {
 			return false, nil
 		}
 		return false, err
@@ -272,7 +289,7 @@ func (c *OSClient) Attach(ctx context.Context, name string) error {
 	}
 
 	if os.Getenv("TMUX") != "" {
-		_, err := c.run(ctx, "switch-client", "-t", name)
+		_, err := c.run(ctx, "switch-client", "-t", sessionTarget(name))
 		return err
 	}
 
@@ -284,7 +301,7 @@ func (c *OSClient) Attach(ctx context.Context, name string) error {
 		return err
 	}
 
-	cmd := exec.CommandContext(ctx, c.tmuxPath, "attach-session", "-t", name, "-d")
+	cmd := exec.CommandContext(ctx, c.tmuxPath, "attach-session", "-t", sessionTarget(name), "-d")
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -297,7 +314,8 @@ func (c *OSClient) Kill(ctx context.Context, name string, all bool) error {
 		_, err := c.run(ctx, "kill-server")
 		if err != nil {
 			errMsg := err.Error()
-			if strings.Contains(errMsg, "no server running") {
+			if strings.Contains(errMsg, "no server running") ||
+				strings.Contains(errMsg, "error connecting to") {
 				return nil
 			}
 			return err
@@ -317,7 +335,7 @@ func (c *OSClient) Kill(ctx context.Context, name string, all bool) error {
 		return fmt.Errorf("%w: session '%s'", ErrNotFound, name)
 	}
 
-	_, err = c.run(ctx, "kill-session", "-t", name)
+	_, err = c.run(ctx, "kill-session", "-t", sessionTarget(name))
 	return err
 }
 
@@ -335,7 +353,7 @@ func (c *OSClient) CapturePane(ctx context.Context, name string, lines int) (str
 		lines = 25
 	}
 	startLine := fmt.Sprintf("-%d", lines)
-	out, err := c.run(ctx, "capture-pane", "-p", "-t", name, "-S", startLine)
+	out, err := c.run(ctx, "capture-pane", "-p", "-t", paneTarget(name), "-S", startLine)
 	if err != nil {
 		return "", fmt.Errorf("capture-pane failed: %w", err)
 	}
@@ -352,11 +370,12 @@ func (c *OSClient) SendKeys(ctx context.Context, name, payload string, enter boo
 		return fmt.Errorf("%w: session '%s'", ErrNotFound, name)
 	}
 
+	target := paneTarget(name)
 	var args []string
 	if raw {
-		args = []string{"send-keys", "-t", name, payload}
+		args = []string{"send-keys", "-t", target, payload}
 	} else {
-		args = []string{"send-keys", "-t", name, "-l", payload}
+		args = []string{"send-keys", "-t", target, "-l", payload}
 	}
 
 	_, err = c.run(ctx, args...)
@@ -365,7 +384,7 @@ func (c *OSClient) SendKeys(ctx context.Context, name, payload string, enter boo
 	}
 
 	if enter {
-		_, err = c.run(ctx, "send-keys", "-t", name, "Enter")
+		_, err = c.run(ctx, "send-keys", "-t", target, "Enter")
 		if err != nil {
 			return fmt.Errorf("send-keys Enter failed: %w", err)
 		}
