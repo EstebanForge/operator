@@ -45,7 +45,7 @@ It addresses two distinct consumers with equal priority:
 
 - **Status:** Accepted
 - **Context:** The name `operator` has personality but is 8 characters. Modifying shell rc files (`.zshrc`) silently is an anti-pattern.
-- **Decision:** Implement a self-contained command (`operator setup`) that creates a relative/absolute symlink named `opr` directly beside the `operator` binary in `$PATH` (e.g., `~/.local/bin/opr` -> `~/.local/bin/operator`). If an `opr` entry already exists and is not a symlink pointing at this binary, refuse with exit code `3` and leave the filesystem untouched. If filesystem permissions deny symlink creation, print the manual alias command to stderr. Do not write to user dotfiles automatically.
+- **Decision:** Implement a self-contained command (`operator setup`) that creates a symlink named `opr` directly beside the invoked `operator` binary (the `$PATH`-resolved path, e.g., `~/.local/bin/opr` -> `~/.local/bin/operator`). The alias never lands beside the symlink-resolved target: that places it inside Homebrew's Cellar, off `$PATH` and dead after `brew upgrade`. Homebrew installs ship `opr` through the formula's `bin.install_symlink`, so `setup` exists for source and local installs. If an `opr` entry already exists and is not a symlink pointing at this binary, refuse with exit code `3` and leave the filesystem untouched. If filesystem permissions deny symlink creation, print the manual alias command to stderr. Do not write to user dotfiles automatically.
 
 ### ADR 005: Safe Delimitation and Terminal Safety
 

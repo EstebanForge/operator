@@ -767,6 +767,61 @@ func TestSetupCommandRefreshesOwnedSymlink(t *testing.T) {
 	}
 }
 
+func TestSetupCommandAliasesBesideInvokedBinary(t *testing.T) {
+	// Regression: a Homebrew-style install invokes through a symlink into a
+	// Cellar-like target dir. The alias must land beside the invoked
+	// symlink (on $PATH), not beside the resolved target (off $PATH).
+	origExec := osExecutable
+	origOsExit := osExit
+	origJSON := jsonFlag
+	defer func() { osExecutable = origExec; osExit = origOsExit; jsonFlag = origJSON }()
+
+	tmp := t.TempDir()
+	binDir := filepath.Join(tmp, "bin")
+	cellarDir := filepath.Join(tmp, "Cellar", "operator", "0.1.0", "bin")
+	for _, d := range []string{binDir, cellarDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	realBin := filepath.Join(cellarDir, "operator")
+	if err := os.WriteFile(realBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	invokedBin := filepath.Join(binDir, "operator")
+	if err := os.Symlink(realBin, invokedBin); err != nil {
+		t.Fatal(err)
+	}
+	osExecutable = func() (string, error) { return invokedBin, nil }
+
+	var lastCode int
+	osExit = func(code int) { lastCode = code }
+	jsonFlag = false
+
+	r, w, _ := os.Pipe()
+	oldStdout := os.Stdout
+	os.Stdout = w
+	setupCmd.Run(setupCmd, []string{})
+	_ = w.Close()
+	os.Stdout = oldStdout
+	_ = r.Close()
+
+	if lastCode != ExitSuccess {
+		t.Errorf("expected exit code %d, got %d", ExitSuccess, lastCode)
+	}
+	alias := filepath.Join(binDir, "opr")
+	link, err := os.Readlink(alias)
+	if err != nil {
+		t.Fatalf("expected alias beside invoked symlink: %v", err)
+	}
+	if link != "operator" {
+		t.Errorf("expected alias target 'operator', got %q", link)
+	}
+	if _, err := os.Lstat(filepath.Join(cellarDir, "opr")); !os.IsNotExist(err) {
+		t.Errorf("alias must not land in the resolved Cellar dir")
+	}
+}
+
 func TestSendJoinsMultiWordPayload(t *testing.T) {
 	origClient := client
 	origJSON := jsonFlag

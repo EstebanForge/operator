@@ -26,16 +26,15 @@ var setupCmd = &cobra.Command{
 			return
 		}
 
-		realPath, evalErr := filepath.EvalSymlinks(execPath)
-		if evalErr != nil || realPath == "" {
-			realPath = execPath
-		}
-
-		dir := filepath.Dir(realPath)
-		binaryName := filepath.Base(realPath)
+		// Alias beside the invoked binary (the PATH dir), not its symlink
+		// resolution: resolving lands inside Homebrew's Cellar, which is off
+		// $PATH and breaks on brew upgrade. EvalSymlinks stays for the
+		// ownership check only.
+		dir := filepath.Dir(execPath)
+		binaryName := filepath.Base(execPath)
 		symlinkPath := filepath.Join(dir, constants.AliasName)
 
-		exists, owned := oprOwnership(symlinkPath, binaryName, realPath)
+		exists, owned := oprOwnership(symlinkPath, binaryName, realPath(execPath))
 		if exists && !owned {
 			HandleError(fmt.Errorf("%w: %s", errSymlinkConflict, symlinkPath))
 			return
@@ -48,7 +47,7 @@ var setupCmd = &cobra.Command{
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Notice: could not create symlink at %s: %s\n", symlinkPath, err)
 			fmt.Fprintln(os.Stderr, "Manual setup instruction:")
-			fmt.Fprintf(os.Stderr, "  alias opr=\"%s\"\n", realPath)
+			fmt.Fprintf(os.Stderr, "  alias opr=\"%s\"\n", execPath)
 			return
 		}
 
@@ -90,4 +89,14 @@ func oprOwnership(path, binaryName, realPath string) (exists, owned bool) {
 		return true, false
 	}
 	return true, target == binaryName || target == realPath
+}
+
+// realPath resolves symlinks for the ownership check, falling back to the
+// invoked path when resolution fails.
+func realPath(execPath string) string {
+	resolved, err := filepath.EvalSymlinks(execPath)
+	if err != nil || resolved == "" {
+		return execPath
+	}
+	return resolved
 }
