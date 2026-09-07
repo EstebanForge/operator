@@ -82,7 +82,9 @@ var newCmd = &cobra.Command{
 					if err := OutputJSON(resp); err != nil {
 						HandleError(err)
 					}
+					return
 				}
+				printSessionExitHint(cmd.Context(), client, sanitized)
 				return
 			}
 			HandleError(err)
@@ -107,6 +109,9 @@ var newCmd = &cobra.Command{
 
 		if newDetached {
 			fmt.Printf("Session '%s' created (detached).\n", sess.Name)
+		} else {
+			// The user returned from the attached session: teach the loop.
+			printSessionExitHint(cmd.Context(), client, sess.Name)
 		}
 	},
 }

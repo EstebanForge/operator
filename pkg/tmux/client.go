@@ -278,6 +278,11 @@ func IsTerminal() bool {
 		(isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd()))
 }
 
+// InsideTmux reports whether the process runs inside a tmux pane.
+func InsideTmux() bool {
+	return os.Getenv("TMUX") != ""
+}
+
 // Attach attaches to a session or switches client if already inside tmux.
 func (c *OSClient) Attach(ctx context.Context, name string) error {
 	exists, err := c.HasSession(ctx, name)
@@ -288,7 +293,7 @@ func (c *OSClient) Attach(ctx context.Context, name string) error {
 		return fmt.Errorf("%w: session '%s'", ErrNotFound, name)
 	}
 
-	if os.Getenv("TMUX") != "" {
+	if InsideTmux() {
 		_, err := c.run(ctx, "switch-client", "-t", sessionTarget(name))
 		return err
 	}

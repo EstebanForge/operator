@@ -39,6 +39,7 @@ It addresses two distinct consumers with equal priority:
   - Output on `stdout` is exclusively valid JSON (no mixed status strings).
   - Informational warnings and logs must route to `stderr`.
   - Strict JSON schemas with stable keys.
+  - Human-only hints (detach/reattach/kill guidance printed when an attached session returns) route to stderr and are suppressed under `--json` or inside tmux.
 
 ### ADR 004: Dual-Name Identity via Binary Symlink (`opr`)
 
@@ -74,8 +75,8 @@ It addresses two distinct consumers with equal priority:
 | ----------- | ------------------ | ------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------- |
 | `[none]`    | None               | Global only                                            | Returns error code `4` + usage if non-TTY.                   | Boots full interactive TUI menu loop.        |
 | `ls`        | None               | `--json`                                               | Returns session list (table or JSON array).                  | Prints formatted status table.               |
-| `new`       | `[name]`           | `-d, --dir <path>`  `-c, --cmd <string>`  `--detached` | Creates session. Auto-generates 3-word bilingual name if omitted. Auto-sanitizes whitespace to `-`. Fails with exit 3 if session exists. Non-TTY requires `--detached` (exit 4 otherwise). | Prompted with default auto-generated name if `<name>` omitted or blank. |
-| `join`      | `<name>`           | None                                                   | Fails with code `4` if non-TTY or `<name>` omitted. Attaches with `-d` (or switches client if inside `$TMUX`). | Single-select list of sessions if omitted.   |
+| `new`       | `[name]`           | `-d, --dir <path>`  `-c, --cmd <string>`  `--detached` | Creates session. Auto-generates 3-word bilingual name if omitted. Auto-sanitizes whitespace to `-`. Fails with exit 3 if session exists. Non-TTY requires `--detached` (exit 4 otherwise). | Prompted with default auto-generated name if `<name>` omitted or blank. Attached sessions print the detach/reattach/kill hint on return (human mode). |
+| `join`      | `<name>`           | None                                                   | Fails with code `4` if non-TTY or `<name>` omitted. Attaches with `-d` (or switches client if inside `$TMUX`). | Single-select list of sessions if omitted. On return prints the detach/reattach/kill hint (human mode). |
 | `peek`      | `<name>`           | `-l, --lines <int>` (default 25)  `--json`             | Reads last $N$ lines from active pane via `capture-pane`.    | Displays paginated preview with back option. |
 | `send`      | `<name> <payload>` | `--no-enter` (default false)  `--raw` (default false)  | Injects keys into session via `send-keys`. Payload is every argument after `<name>` joined with single spaces, so quoting is optional. Defaults to literal text (`-l`); sends raw tmux key names if `--raw`. | Not in TUI menu (agent/script focused).      |
 | `kill`      | `<name>`           | `-a, --all`  `-f, --force`                             | Kills session. Fails if name missing unless `-a` is passed. `-a` runs `kill-server` (whole tmux server). Unprompted in non-TTY. | Confirmation modal required unless `-f`.     |
@@ -215,6 +216,7 @@ JSON
 1. Implement `cmd/tui.go` containing the main loop:
    - Header showing active session counts.
    - Menu: `Attach`, `New`, `Peek`, `Kill`, `Exit`.
+   - Menu description teaches the detach/exit keys (`Ctrl-b d` detaches, `exit` closes).
    - Guard empty states (e.g., if sessions == 0, disable `Attach`/`Peek`/`Kill` or route to `New`).
 2. Integrate safety confirmation modals before executing destructive actions (`kill`).
 
@@ -238,3 +240,5 @@ JSON
 - Test unquoted multi-word send: `operator send web echo hello world` delivers `echo hello world` as one payload.
 - Test `setup` with a foreign `opr` file present: exits 3, file untouched.
 - Test attached `new` whose session closes normally: exit code 0, JSON `details.exited` is `true`.
+- Test exit hints: an attached `join` that returns prints the detach or closed hint on stderr and nothing extra on stdout.
+- Test hints stay silent under `--json` and when `$TMUX` is set (switch-client returns while the user stays attached).

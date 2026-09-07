@@ -441,6 +441,74 @@ func TestCommandErrorHandling(t *testing.T) {
 	})
 }
 
+func TestDetachAndClosedHints(t *testing.T) {
+	t.Parallel()
+	got := detachHint("work")
+	if !strings.Contains(got, "Detached. 'work' is still running.") ||
+		!strings.Contains(got, "operator join work") ||
+		!strings.Contains(got, "operator kill work") {
+		t.Errorf("detachHint missing detach/reattach/kill guidance: %q", got)
+	}
+	if got := closedHint("work"); got != "Session 'work' closed.\n" {
+		t.Errorf("unexpected closedHint: %q", got)
+	}
+}
+
+func TestPrintSessionExitHint(t *testing.T) {
+	origClient := client
+	origJSON := jsonFlag
+	defer func() { client = origClient; jsonFlag = origJSON }()
+
+	capture := func() string {
+		r, w, _ := os.Pipe()
+		oldStderr := os.Stderr
+		os.Stderr = w
+		printSessionExitHint(context.Background(), client, "work")
+		_ = w.Close()
+		os.Stderr = oldStderr
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(r)
+		_ = r.Close()
+		return buf.String()
+	}
+
+	t.Run("alive session prints detach hint", func(t *testing.T) {
+		t.Setenv("TMUX", "")
+		jsonFlag = false
+		client = &mockTmuxClient{sessions: []tmux.Session{{Name: "work"}}}
+		if out := capture(); !strings.Contains(out, "Detached. 'work' is still running.") {
+			t.Errorf("expected detach hint, got %q", out)
+		}
+	})
+
+	t.Run("gone session prints closed hint", func(t *testing.T) {
+		t.Setenv("TMUX", "")
+		jsonFlag = false
+		client = &mockTmuxClient{}
+		if out := capture(); out != "Session 'work' closed.\n" {
+			t.Errorf("expected closed hint, got %q", out)
+		}
+	})
+
+	t.Run("json mode prints nothing", func(t *testing.T) {
+		t.Setenv("TMUX", "")
+		jsonFlag = true
+		client = &mockTmuxClient{sessions: []tmux.Session{{Name: "work"}}}
+		if out := capture(); out != "" {
+			t.Errorf("expected no hint in json mode, got %q", out)
+		}
+	})
+
+	t.Run("inside tmux prints nothing", func(t *testing.T) {
+		t.Setenv("TMUX", "/tmp/tmux-0/default,123,0")
+		jsonFlag = false
+		client = &mockTmuxClient{sessions: []tmux.Session{{Name: "work"}}}
+		if out := capture(); out != "" {
+			t.Errorf("expected no hint inside tmux, got %q", out)
+		}
+	})
+}
+
 func TestOprOwnership(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

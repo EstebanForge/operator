@@ -43,6 +43,7 @@ var joinCmd = &cobra.Command{
 
 			err = runField(cmd.Context(), huh.NewSelect[string]().
 				Title("Select Session to Join").
+				Description(tuiMenuHint).
 				Options(options...).
 				Value(&name))
 			if err != nil {
@@ -58,6 +59,9 @@ var joinCmd = &cobra.Command{
 			HandleError(err)
 			return
 		}
+
+		// The tmux client returned: teach the detach/reattach/kill loop.
+		printSessionExitHint(cmd.Context(), client, name)
 	},
 }
 

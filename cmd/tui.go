@@ -31,6 +31,9 @@ func runFieldWithEsc(ctx context.Context, field huh.Field) error {
 	return form.RunWithContext(ctx)
 }
 
+// tuiMenuHint is the static teaching line shown on interactive session screens.
+const tuiMenuHint = "Inside tmux: Ctrl-b d detaches, exit closes."
+
 // RunTUI launches the interactive menu loop.
 func RunTUI(ctx context.Context, c tmux.Client) error {
 	for {
@@ -62,6 +65,7 @@ func RunTUI(ctx context.Context, c tmux.Client) error {
 
 		err = runField(ctx, huh.NewSelect[string]().
 			Title(title).
+			Description(tuiMenuHint).
 			Options(options...).
 			Value(&action))
 		if err != nil {
