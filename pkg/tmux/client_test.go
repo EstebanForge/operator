@@ -59,6 +59,35 @@ func TestSessionTarget(t *testing.T) {
 	}
 }
 
+func TestParseWindowResult(t *testing.T) {
+	t.Parallel()
+	t.Run("valid output", func(t *testing.T) {
+		res, err := parseWindowResult("@3\t3\tmytab\t/srv/app\n")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Window != "@3" || res.Index != 3 || res.Name != "mytab" || res.Directory != "/srv/app" {
+			t.Errorf("unexpected result: %+v", res)
+		}
+	})
+
+	t.Run("trailing tab kept for empty path", func(t *testing.T) {
+		res, err := parseWindowResult("@1\t1\tbash\t\n")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Directory != "" || res.Name != "bash" {
+			t.Errorf("unexpected result: %+v", res)
+		}
+	})
+
+	t.Run("malformed output", func(t *testing.T) {
+		if _, err := parseWindowResult("not-enough-fields"); err == nil {
+			t.Errorf("expected error for malformed new-window output")
+		}
+	})
+}
+
 func TestParseSessionList(t *testing.T) {
 	t.Parallel()
 	t.Run("empty output", func(t *testing.T) {
@@ -108,6 +137,19 @@ func TestParseSessionList(t *testing.T) {
 		}
 		if !got[1].IsAttached {
 			t.Errorf("expected s2 IsAttached true")
+		}
+	})
+
+	t.Run("trailing empty path kept", func(t *testing.T) {
+		// The last session reports an empty pane path; TrimSpace on the whole
+		// payload used to eat the trailing tab and drop the session.
+		input := "keep\t1\t1700000000\t0\t/tmp/ok\ndropped\t2\t1700000100\t1\t\n"
+		got := ParseSessionList(input)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 sessions, got %d: %+v", len(got), got)
+		}
+		if got[1].Name != "dropped" || got[1].Path != "" {
+			t.Errorf("expected session with empty path preserved, got: %+v", got[1])
 		}
 	})
 

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/EstebanForge/operator/pkg/tmux"
-	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
 )
 
@@ -27,33 +26,15 @@ var peekCmd = &cobra.Command{
 				return
 			}
 
-			sessions, err := client.ListSessions(cmd.Context())
+			picked, err := pickSession(cmd.Context(), "Select Session to Peek")
 			if err != nil {
-				HandleError(err)
-				return
-			}
-			if len(sessions) == 0 {
-				HandleError(fmt.Errorf("%w: no active tmux sessions", tmux.ErrNotFound))
-				return
-			}
-
-			options := make([]huh.Option[string], 0, len(sessions))
-			for _, s := range sessions {
-				label := fmt.Sprintf("%s (%d windows)", s.Name, s.Windows)
-				options = append(options, huh.NewOption(label, s.Name))
-			}
-
-			err = runField(cmd.Context(), huh.NewSelect[string]().
-				Title("Select Session to Peek").
-				Options(options...).
-				Value(&name))
-			if err != nil {
-				if errors.Is(err, huh.ErrUserAborted) {
+				if errors.Is(err, errAborted) {
 					return
 				}
 				HandleError(err)
 				return
 			}
+			name = picked
 		}
 
 		output, err := client.CapturePane(cmd.Context(), name, peekLines)

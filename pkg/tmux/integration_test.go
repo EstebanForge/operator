@@ -50,6 +50,39 @@ func TestOSClient_RealTmux_Integration(t *testing.T) {
 		}
 	})
 
+	t.Run("NewWindow creates tab in session", func(t *testing.T) {
+		sessName := "operator-test-" + GenerateSessionName()
+		defer func() { _ = client.Kill(ctx, sessName, false) }()
+
+		if _, err := client.NewSession(ctx, sessName, "", "", true); err != nil {
+			t.Fatalf("failed to create base session: %v", err)
+		}
+
+		res, err := client.NewWindow(ctx, sessName, "tabcheck", "/tmp")
+		if err != nil {
+			t.Fatalf("failed to create window: %v", err)
+		}
+		if res.Name != "tabcheck" || res.Directory != "/tmp" {
+			t.Errorf("unexpected window result: %+v", res)
+		}
+		if !strings.HasPrefix(res.Window, "@") {
+			t.Errorf("expected window id like '@1', got %q", res.Window)
+		}
+
+		// Base-index agnostic: the second tab must sit above the first.
+		res2, err := client.NewWindow(ctx, sessName, "tabcheck2", "/tmp")
+		if err != nil {
+			t.Fatalf("failed to create second window: %v", err)
+		}
+		if res2.Index <= res.Index {
+			t.Errorf("expected increasing window index, got %d then %d", res.Index, res2.Index)
+		}
+
+		if _, err := client.NewWindow(ctx, "operator-test-missing-"+GenerateSessionName(), "x", ""); err == nil {
+			t.Errorf("expected error for missing session")
+		}
+	})
+
 	t.Run("Kill non-existent session returns ErrNotFound", func(t *testing.T) {
 		nonExistent := "operator-test-nonexistent-" + GenerateSessionName()
 		err := client.Kill(ctx, nonExistent, false)

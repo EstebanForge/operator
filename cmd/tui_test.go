@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"os"
 	"testing"
 
 	"github.com/EstebanForge/operator/pkg/tmux"
@@ -59,6 +61,45 @@ func TestFormAbortsOnEscapeKey(t *testing.T) {
 	}
 }
 
+// captureTUIStdout redirects os.Stdout while RunTUI prints human feedback
+// (peek blocks, tab confirmations, kill results). The returned func closes
+// the pipe and returns everything printed so far.
+func captureTUIStdout(t *testing.T) func() string {
+	t.Helper()
+	r, w, _ := os.Pipe()
+	old := os.Stdout
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = old })
+	return func() string {
+		_ = w.Close()
+		os.Stdout = old
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(r)
+		_ = r.Close()
+		return buf.String()
+	}
+}
+
+// pressEnter selects the currently highlighted option of a select field.
+func pressEnter(f huh.Field) {
+	sel, ok := f.(*huh.Select[string])
+	if !ok {
+		return
+	}
+	sel.Init()
+	sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
+}
+
+// pressEnterOnInput submits the current value of an input field.
+func pressEnterOnInput(f huh.Field) {
+	input, ok := f.(*huh.Input)
+	if !ok {
+		return
+	}
+	input.Init()
+	input.Update(tea.KeyMsg{Type: tea.KeyEnter})
+}
+
 func TestRunTUI_RootEscapeExits(t *testing.T) {
 	origRunField := runField
 	defer func() { runField = origRunField }()
@@ -85,9 +126,10 @@ func TestRunTUI_RootEscapeExits(t *testing.T) {
 	}
 }
 
-func TestRunTUI_AttachEscapeGoesBackToRoot(t *testing.T) {
+func TestRunTUI_SessionFirst_AttachFlow(t *testing.T) {
 	origRunField := runField
 	defer func() { runField = origRunField }()
+	t.Setenv("TMUX", "/tmp/tmux-0/default,1,0") // silence the post-attach hint on stderr
 
 	step := 0
 	runField = func(_ context.Context, f huh.Field) error {
@@ -95,19 +137,18 @@ func TestRunTUI_AttachEscapeGoesBackToRoot(t *testing.T) {
 		step++
 		switch step {
 		case 1:
-			// Root menu: select "attach"
-			sel, ok := f.(*huh.Select[string])
-			if !ok {
-				t.Fatalf("expected *huh.Select[string] at step 1")
-			}
-			sel.Init()
-			sel.Update(tea.KeyMsg{Type: tea.KeyEnter}) // selects "attach" (first item)
+			// Root: the first option is the session itself; select it.
+			pressEnter(f)
 			return nil
 		case 2:
-			// Submenu: Attach session selection -> press ESC
-			return huh.ErrUserAborted
+			// Session submenu: "Attach to Session" is first; select it.
+			pressEnter(f)
+			return nil
 		case 3:
-			// Returned back to root menu! Now press ESC to exit
+			// Back in the submenu after attach: ESC = Back.
+			return huh.ErrUserAborted
+		case 4:
+			// Root menu again: ESC exits.
 			return huh.ErrUserAborted
 		default:
 			t.Fatalf("unexpected step %d", step)
@@ -116,23 +157,23 @@ func TestRunTUI_AttachEscapeGoesBackToRoot(t *testing.T) {
 	}
 
 	mock := &mockTmuxClient{
-		sessions: []tmux.Session{
-			{Name: "sess1", Windows: 1},
-		},
+		sessions: []tmux.Session{{Name: "sess1", Windows: 1}},
 	}
 
 	err := RunTUI(t.Context(), mock)
 	if err != nil {
 		t.Fatalf("expected RunTUI to return nil, got: %v", err)
 	}
-	if step != 3 {
-		t.Fatalf("expected 3 steps (root -> attach [ESC] -> root [ESC]), got %d", step)
+	if step != 4 {
+		t.Fatalf("expected 4 steps (root -> submenu attach -> submenu ESC -> root ESC), got %d", step)
 	}
 }
 
-func TestRunTUI_PeekEscapeGoesBackToRoot(t *testing.T) {
+func TestRunTUI_SessionFirst_PeekFlow(t *testing.T) {
 	origRunField := runField
 	defer func() { runField = origRunField }()
+
+	capture := captureTUIStdout(t)
 
 	step := 0
 	runField = func(_ context.Context, f huh.Field) error {
@@ -140,21 +181,23 @@ func TestRunTUI_PeekEscapeGoesBackToRoot(t *testing.T) {
 		step++
 		switch step {
 		case 1:
-			// Root menu: navigate to "peek" (down twice: attach -> new -> peek)
-			sel, ok := f.(*huh.Select[string])
-			if !ok {
-				t.Fatalf("expected *huh.Select[string] at step 1")
-			}
+			// Root: select the session.
+			pressEnter(f)
+			return nil
+		case 2:
+			// Session submenu: navigate to "Peek Session Output"
+			// (attach -> tab -> peek = two downs).
+			sel := f.(*huh.Select[string])
 			sel.Init()
 			sel.Update(tea.KeyMsg{Type: tea.KeyDown})
 			sel.Update(tea.KeyMsg{Type: tea.KeyDown})
 			sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			return nil
-		case 2:
-			// Submenu: Peek session selection -> press ESC
-			return huh.ErrUserAborted
 		case 3:
-			// Returned to root menu -> press ESC to exit
+			// Back in the submenu after peek: ESC = Back.
+			return huh.ErrUserAborted
+		case 4:
+			// Root menu: ESC exits.
 			return huh.ErrUserAborted
 		default:
 			t.Fatalf("unexpected step %d", step)
@@ -163,17 +206,82 @@ func TestRunTUI_PeekEscapeGoesBackToRoot(t *testing.T) {
 	}
 
 	mock := &mockTmuxClient{
-		sessions: []tmux.Session{
-			{Name: "sess1", Windows: 1},
-		},
+		sessions: []tmux.Session{{Name: "sess1", Windows: 1}},
 	}
 
 	err := RunTUI(t.Context(), mock)
 	if err != nil {
 		t.Fatalf("expected RunTUI to return nil, got: %v", err)
 	}
-	if step != 3 {
-		t.Fatalf("expected 3 steps, got %d", step)
+	if step != 4 {
+		t.Fatalf("expected 4 steps, got %d", step)
+	}
+	if out := capture(); !bytes.Contains([]byte(out), []byte("Captured Output")) {
+		t.Errorf("expected peek output block, got: %q", out)
+	}
+}
+
+func TestRunTUI_SessionFirst_TabFlow(t *testing.T) {
+	origRunField := runField
+	defer func() { runField = origRunField }()
+
+	capture := captureTUIStdout(t)
+
+	step := 0
+	runField = func(_ context.Context, f huh.Field) error {
+		f.WithKeyMap(huh.NewDefaultKeyMap())
+		step++
+		switch step {
+		case 1:
+			// Root: select the session.
+			pressEnter(f)
+			return nil
+		case 2:
+			// Session submenu: "Create Tab in Session" (one down from attach).
+			sel := f.(*huh.Select[string])
+			sel.Init()
+			sel.Update(tea.KeyMsg{Type: tea.KeyDown})
+			sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			return nil
+		case 3:
+			// Tab flow step 1: working directory (prefilled) -> Enter.
+			pressEnterOnInput(f)
+			return nil
+		case 4:
+			// Tab flow step 2: optional name -> Enter.
+			pressEnterOnInput(f)
+			return nil
+		case 5:
+			// Back in the submenu: ESC = Back.
+			return huh.ErrUserAborted
+		case 6:
+			// Root: ESC exits.
+			return huh.ErrUserAborted
+		default:
+			t.Fatalf("unexpected step %d", step)
+			return nil
+		}
+	}
+
+	mock := &mockTmuxClient{
+		sessions: []tmux.Session{{Name: "sess1", Windows: 1, Path: "/srv/sess1"}},
+	}
+
+	err := RunTUI(t.Context(), mock)
+	if err != nil {
+		t.Fatalf("expected RunTUI to return nil, got: %v", err)
+	}
+	if step != 6 {
+		t.Fatalf("expected 6 steps, got %d", step)
+	}
+	if mock.lastWindow.Directory != "/srv/sess1" {
+		t.Errorf("expected tab dir to default to the session path, got %q", mock.lastWindow.Directory)
+	}
+	if mock.lastWindow.Name != "bash" {
+		t.Errorf("expected tmux default window name, got %q", mock.lastWindow.Name)
+	}
+	if out := capture(); !bytes.Contains([]byte(out), []byte("created in 'sess1'")) {
+		t.Errorf("expected tab confirmation, got: %q", out)
 	}
 }
 
@@ -188,15 +296,14 @@ func TestRunTUI_NewSession_EscLevels(t *testing.T) {
 			step++
 			switch step {
 			case 1:
-				// Root menu: select "new" (when 0 sessions, option 0 is "new")
-				sel := f.(*huh.Select[string])
-				sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				// Root menu (0 sessions): first option is "Create New Session".
+				pressEnter(f)
 				return nil
 			case 2:
-				// Submenu "new" Step 1: Session name input -> press ESC
+				// New flow step 1: session name input -> press ESC.
 				return huh.ErrUserAborted
 			case 3:
-				// Returned to root -> press ESC to exit
+				// Returned to root -> press ESC to exit.
 				return huh.ErrUserAborted
 			default:
 				t.Fatalf("unexpected step %d", step)
@@ -214,30 +321,28 @@ func TestRunTUI_NewSession_EscLevels(t *testing.T) {
 		}
 	})
 
-	// Test: Root -> New -> Step 1 (enter) -> Step 2 (confirm) -> ESC -> Step 1 (Session name) -> ESC -> Root -> ESC
+	// Test: Root -> New -> Step 1 (enter) -> Step 2 (confirm) -> ESC -> Step 1 -> ESC -> Root -> ESC
 	t.Run("ESC at step 2 goes back to step 1", func(t *testing.T) {
 		step := 0
 		runField = func(_ context.Context, f huh.Field) error {
 			step++
 			switch step {
 			case 1:
-				// Root menu: select "new"
-				sel := f.(*huh.Select[string])
-				sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				// Root: select "Create New Session".
+				pressEnter(f)
 				return nil
 			case 2:
-				// Submenu "new" Step 1: Session name input -> press Enter
-				input := f.(*huh.Input)
-				input.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				// New flow step 1: session name input -> press Enter.
+				pressEnterOnInput(f)
 				return nil
 			case 3:
-				// Submenu "new" Step 2: Confirm attach -> press ESC (goes back to Step 1)
+				// New flow step 2: confirm attach -> press ESC (back to step 1).
 				return huh.ErrUserAborted
 			case 4:
-				// Back at Submenu "new" Step 1: Session name input -> press ESC (goes back to Root)
+				// New flow step 1 again: press ESC (back to root).
 				return huh.ErrUserAborted
 			case 5:
-				// Back at Root menu -> press ESC to exit
+				// Root: press ESC to exit.
 				return huh.ErrUserAborted
 			default:
 				t.Fatalf("unexpected step %d", step)
@@ -260,76 +365,39 @@ func TestRunTUI_KillSession_EscLevels(t *testing.T) {
 	origRunField := runField
 	defer func() { runField = origRunField }()
 
-	// Test: Root -> Kill -> Step 1 (Select session) -> ESC -> Root -> ESC
-	t.Run("ESC at step 1 goes back to root", func(t *testing.T) {
+	selectKillInSubmenu := func(f huh.Field) {
+		sel := f.(*huh.Select[string])
+		sel.Init()
+		// attach -> tab -> peek -> kill = three downs.
+		for range 3 {
+			sel.Update(tea.KeyMsg{Type: tea.KeyDown})
+		}
+		sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	// Test: Root -> session -> submenu Kill -> confirm ESC -> submenu ESC -> root ESC
+	t.Run("ESC at confirm goes back to submenu", func(t *testing.T) {
 		step := 0
 		runField = func(_ context.Context, f huh.Field) error {
 			f.WithKeyMap(huh.NewDefaultKeyMap())
 			step++
 			switch step {
 			case 1:
-				// Root: navigate to "kill" (down 3 times: attach -> new -> peek -> kill)
-				sel := f.(*huh.Select[string])
-				sel.Init()
-				sel.Update(tea.KeyMsg{Type: tea.KeyDown})
-				sel.Update(tea.KeyMsg{Type: tea.KeyDown})
-				sel.Update(tea.KeyMsg{Type: tea.KeyDown})
-				sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				// Root: select the session.
+				pressEnter(f)
 				return nil
 			case 2:
-				// Submenu "kill" Step 1: Select Session -> press ESC
-				return huh.ErrUserAborted
-			case 3:
-				// Back at Root menu -> press ESC to exit
-				return huh.ErrUserAborted
-			default:
-				t.Fatalf("unexpected step %d", step)
-				return nil
-			}
-		}
-
-		mock := &mockTmuxClient{
-			sessions: []tmux.Session{{Name: "worker1", Windows: 1}},
-		}
-		err := RunTUI(t.Context(), mock)
-		if err != nil {
-			t.Fatalf("expected nil, got %v", err)
-		}
-		if step != 3 {
-			t.Fatalf("expected 3 steps, got %d", step)
-		}
-	})
-
-	// Test: Root -> Kill -> Step 1 (select) -> Step 2 (confirm) -> ESC -> Step 1 -> ESC -> Root -> ESC
-	t.Run("ESC at step 2 goes back to step 1", func(t *testing.T) {
-		step := 0
-		runField = func(_ context.Context, f huh.Field) error {
-			f.WithKeyMap(huh.NewDefaultKeyMap())
-			step++
-			switch step {
-			case 1:
-				// Root: select "kill"
-				sel := f.(*huh.Select[string])
-				sel.Init()
-				sel.Update(tea.KeyMsg{Type: tea.KeyDown})
-				sel.Update(tea.KeyMsg{Type: tea.KeyDown})
-				sel.Update(tea.KeyMsg{Type: tea.KeyDown})
-				sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
-				return nil
-			case 2:
-				// Submenu "kill" Step 1: Select session -> press Enter
-				sel := f.(*huh.Select[string])
-				sel.Init()
-				sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				// Session submenu: select "Kill Session".
+				selectKillInSubmenu(f)
 				return nil
 			case 3:
-				// Submenu "kill" Step 2: Confirm kill -> press ESC (goes back to Step 1)
+				// Kill confirm: press ESC (back to submenu).
 				return huh.ErrUserAborted
 			case 4:
-				// Back at Submenu "kill" Step 1 -> press ESC (goes back to Root)
+				// Session submenu: press ESC (back to root).
 				return huh.ErrUserAborted
 			case 5:
-				// Back at Root menu -> press ESC to exit
+				// Root: press ESC to exit.
 				return huh.ErrUserAborted
 			default:
 				t.Fatalf("unexpected step %d", step)
@@ -337,9 +405,7 @@ func TestRunTUI_KillSession_EscLevels(t *testing.T) {
 			}
 		}
 
-		mock := &mockTmuxClient{
-			sessions: []tmux.Session{{Name: "worker1", Windows: 1}},
-		}
+		mock := &mockTmuxClient{sessions: []tmux.Session{{Name: "worker1", Windows: 1}}}
 		err := RunTUI(t.Context(), mock)
 		if err != nil {
 			t.Fatalf("expected nil, got %v", err)
@@ -349,39 +415,32 @@ func TestRunTUI_KillSession_EscLevels(t *testing.T) {
 		}
 	})
 
-	// Test: Rejecting confirm ("No") in kill goes back to Step 1
-	t.Run("Rejecting confirm in kill goes back to step 1", func(t *testing.T) {
+	// Test: rejecting the confirm ("No") stays in the submenu.
+	t.Run("Rejecting confirm stays in submenu", func(t *testing.T) {
 		step := 0
 		runField = func(_ context.Context, f huh.Field) error {
 			f.WithKeyMap(huh.NewDefaultKeyMap())
 			step++
 			switch step {
 			case 1:
-				// Root: select "kill"
-				sel := f.(*huh.Select[string])
-				sel.Init()
-				sel.Update(tea.KeyMsg{Type: tea.KeyDown})
-				sel.Update(tea.KeyMsg{Type: tea.KeyDown})
-				sel.Update(tea.KeyMsg{Type: tea.KeyDown})
-				sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				// Root: select the session.
+				pressEnter(f)
 				return nil
 			case 2:
-				// Submenu "kill" Step 1: Select session -> press Enter
-				sel := f.(*huh.Select[string])
-				sel.Init()
-				sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				// Session submenu: select "Kill Session".
+				selectKillInSubmenu(f)
 				return nil
 			case 3:
-				// Submenu "kill" Step 2: Confirm kill -> choose No ('n')
+				// Kill confirm: choose "No".
 				confirm := f.(*huh.Confirm)
 				confirm.Init()
 				confirm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 				return nil
 			case 4:
-				// Back at Submenu "kill" Step 1 -> press ESC (goes back to Root)
+				// Session submenu: press ESC (back to root).
 				return huh.ErrUserAborted
 			case 5:
-				// Back at Root menu -> press ESC to exit
+				// Root: press ESC to exit.
 				return huh.ErrUserAborted
 			default:
 				t.Fatalf("unexpected step %d", step)
@@ -389,9 +448,7 @@ func TestRunTUI_KillSession_EscLevels(t *testing.T) {
 			}
 		}
 
-		mock := &mockTmuxClient{
-			sessions: []tmux.Session{{Name: "worker1", Windows: 1}},
-		}
+		mock := &mockTmuxClient{sessions: []tmux.Session{{Name: "worker1", Windows: 1}}}
 		err := RunTUI(t.Context(), mock)
 		if err != nil {
 			t.Fatalf("expected nil, got %v", err)

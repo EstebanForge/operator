@@ -50,11 +50,23 @@ type DoctorResult struct {
 	InstallHint   *InstallInfo `json:"install_hint,omitempty"`
 }
 
+// windowFormat is the tab-delimited -P -F output contract for new-window.
+const windowFormat = "#{window_id}\t#{window_index}\t#{window_name}\t#{pane_current_path}"
+
+// WindowResult describes a tmux window (tab) created by NewWindow.
+type WindowResult struct {
+	Window    string `json:"window"`    // tmux window id, e.g. "@3"
+	Index     int    `json:"index"`     // window index inside the session
+	Name      string `json:"name"`      // window name (shell name when unset)
+	Directory string `json:"directory"` // start directory of the window's pane
+}
+
 // Client defines operations against the tmux server.
 type Client interface {
 	ListSessions(ctx context.Context) ([]Session, error)
 	HasSession(ctx context.Context, name string) (bool, error)
 	NewSession(ctx context.Context, name, dir, cmdStr string, detached bool) (*Session, error)
+	NewWindow(ctx context.Context, session, name, dir string) (*WindowResult, error)
 	Attach(ctx context.Context, name string) error
 	Kill(ctx context.Context, name string, all bool) error
 	CapturePane(ctx context.Context, name string, lines int) (string, error)
@@ -134,8 +146,9 @@ func (c *OSClient) run(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 // ParseSessionList parses the tab-delimited tmux list-sessions output.
+// Trims only line endings: a trailing tab is significant (empty pane path).
 func ParseSessionList(output string) []Session {
-	lines := strings.Split(strings.TrimSpace(output), "\n")
+	lines := strings.Split(strings.TrimRight(output, "\r\n"), "\n")
 	sessions := make([]Session, 0, len(lines))
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -269,6 +282,71 @@ func (c *OSClient) NewSession(ctx context.Context, name, dir, cmdStr string, det
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 		IsAttached: false,
 		Path:       dir,
+	}, nil
+}
+
+// NewWindow creates a new window (tab) in an existing session at the next
+// free index. An empty name lets tmux name the window after its running
+// shell; an empty dir falls back to the tmux client's working directory.
+func (c *OSClient) NewWindow(ctx context.Context, session, name, dir string) (*WindowResult, error) {
+	session = strings.TrimSpace(session)
+	if session == "" {
+		return nil, fmt.Errorf("%w: session name required", ErrValidation)
+	}
+
+	exists, err := c.HasSession(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, fmt.Errorf("%w: session '%s'", ErrNotFound, session)
+	}
+
+	if dir != "" {
+		if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
+			return nil, fmt.Errorf("%w: directory not found: %s", ErrValidation, dir)
+		}
+	}
+
+	// '=session:' targets the exact session with an empty window part, which
+	// new-window resolves to the next free index.
+	args := []string{"new-window", "-P", "-F", windowFormat, "-t", paneTarget(session)}
+	if dir != "" {
+		args = append(args, "-c", dir)
+	}
+	if name != "" {
+		args = append(args, "-n", name)
+	}
+
+	out, err := c.run(ctx, args...)
+	if err != nil {
+		errMsg := err.Error()
+		// Mirror HasSession: the server may vanish between the existence check
+		// and the call (last session killed); that is not-found, not daemon.
+		if strings.Contains(errMsg, "can't find session") ||
+			strings.Contains(errMsg, "no server running") ||
+			strings.Contains(errMsg, "no sessions") ||
+			strings.Contains(errMsg, "error connecting to") {
+			return nil, fmt.Errorf("%w: session '%s'", ErrNotFound, session)
+		}
+		return nil, fmt.Errorf("new-window failed: %w", err)
+	}
+	return parseWindowResult(string(out))
+}
+
+// parseWindowResult parses the tab-delimited -P -F output of new-window.
+// Trims only line endings: a trailing tab is significant (empty pane path).
+func parseWindowResult(output string) (*WindowResult, error) {
+	parts := strings.Split(strings.TrimRight(output, "\r\n"), "\t")
+	if len(parts) < 4 {
+		return nil, fmt.Errorf("unexpected new-window output: %q", output)
+	}
+	index, _ := strconv.Atoi(parts[1]) //nolint:errcheck // fallback to 0
+	return &WindowResult{
+		Window:    parts[0],
+		Index:     index,
+		Name:      parts[2],
+		Directory: parts[3],
 	}, nil
 }
 

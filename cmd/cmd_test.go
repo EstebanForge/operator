@@ -16,19 +16,21 @@ import (
 )
 
 type mockTmuxClient struct {
-	sessions []tmux.Session
-	listErr  error
-	hasErr   error
-	newErr   error
-	killErr  error
-	peekErr  error
-	sendErr  error
-	docRes   *tmux.DoctorResult
-	docErr   error
+	sessions  []tmux.Session
+	listErr   error
+	hasErr    error
+	newErr    error
+	newWinErr error
+	killErr   error
+	peekErr   error
+	sendErr   error
+	docRes    *tmux.DoctorResult
+	docErr    error
 
 	lastSentPayload string
 	lastSentEnter   bool
 	lastSentRaw     bool
+	lastWindow      tmux.WindowResult
 }
 
 func (m *mockTmuxClient) ListSessions(_ context.Context) ([]tmux.Session, error) {
@@ -67,6 +69,18 @@ func (m *mockTmuxClient) NewSession(_ context.Context, name, dir, _ string, deta
 
 func (m *mockTmuxClient) Attach(_ context.Context, _ string) error {
 	return nil
+}
+
+func (m *mockTmuxClient) NewWindow(_ context.Context, _, name, dir string) (*tmux.WindowResult, error) {
+	if m.newWinErr != nil {
+		return nil, m.newWinErr
+	}
+	if name == "" {
+		name = "bash"
+	}
+	m.lastWindow = tmux.WindowResult{Window: "@9", Index: 9, Name: name, Directory: dir}
+	res := m.lastWindow
+	return &res, nil
 }
 
 func (m *mockTmuxClient) Kill(_ context.Context, name string, all bool) error {
@@ -507,6 +521,123 @@ func TestPrintSessionExitHint(t *testing.T) {
 			t.Errorf("expected no hint inside tmux, got %q", out)
 		}
 	})
+}
+
+func TestTabCommand(t *testing.T) {
+	origOsExit := osExit
+	origClient := client
+	origIsTerm := isTerminal
+	origJSON := jsonFlag
+	origTabDir, origTabName := tabDir, tabName
+	defer func() {
+		osExit = origOsExit
+		client = origClient
+		isTerminal = origIsTerm
+		jsonFlag = origJSON
+		tabDir, tabName = origTabDir, origTabName
+	}()
+
+	var lastCode int
+	osExit = func(code int) { lastCode = code }
+	isTerminal = func() bool { return false }
+
+	t.Run("non-interactive without session fails validation", func(t *testing.T) {
+		lastCode = -1
+		tabDir, tabName = "", ""
+		SetClient(&mockTmuxClient{})
+		tabCmd.Run(tabCmd, []string{})
+		if lastCode != ExitValidation {
+			t.Errorf("expected exit code %d, got %d", ExitValidation, lastCode)
+		}
+	})
+
+	t.Run("json result carries window details", func(t *testing.T) {
+		lastCode = -1
+		jsonFlag = true
+		// The resolver validates the flag on disk, so use a real directory.
+		flagDir := t.TempDir()
+		tabDir, tabName = flagDir, "build"
+		mock := &mockTmuxClient{sessions: []tmux.Session{{Name: "work"}}}
+		SetClient(mock)
+
+		r, w, _ := os.Pipe()
+		oldStdout := os.Stdout
+		os.Stdout = w
+		tabCmd.Run(tabCmd, []string{"work"})
+		_ = w.Close()
+		os.Stdout = oldStdout
+
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(r)
+		_ = r.Close()
+
+		var res map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &res); err != nil {
+			t.Fatalf("failed to unmarshal JSON: %s, output was: %s", err, buf.String())
+		}
+		if res["status"] != "ok" || res["action"] != "tab" || res["session"] != "work" {
+			t.Fatalf("unexpected tab result: %+v", res)
+		}
+		details := res["details"].(map[string]any)
+		if details["window"] != "@9" || details["index"] != float64(9) || details["name"] != "build" || details["directory"] != flagDir {
+			t.Errorf("unexpected details: %+v", details)
+		}
+		if lastCode != -1 {
+			t.Errorf("success path must not exit, got code %d", lastCode)
+		}
+	})
+
+	t.Run("missing session maps to not found", func(t *testing.T) {
+		lastCode = -1
+		jsonFlag = false
+		tabDir, tabName = "", ""
+		SetClient(&mockTmuxClient{newWinErr: fmt.Errorf("%w: session 'ghost'", tmux.ErrNotFound)})
+
+		tabCmd.Run(tabCmd, []string{"ghost"})
+		if lastCode != ExitNotFound {
+			t.Errorf("expected exit code %d, got %d", ExitNotFound, lastCode)
+		}
+	})
+
+	t.Run("invalid directory maps to validation", func(t *testing.T) {
+		lastCode = -1
+		jsonFlag = false
+		tabDir, tabName = "/no/such/dir", ""
+		SetClient(&mockTmuxClient{newWinErr: fmt.Errorf("%w: directory not found: /no/such/dir", tmux.ErrValidation)})
+
+		tabCmd.Run(tabCmd, []string{"work"})
+		if lastCode != ExitValidation {
+			t.Errorf("expected exit code %d, got %d", ExitValidation, lastCode)
+		}
+	})
+}
+
+func TestResolveTabDir(t *testing.T) {
+	origClient := client
+	defer func() { client = origClient }()
+
+	tmp := t.TempDir()
+	sessDir := filepath.Join(tmp, "sessdir")
+	if err := os.Mkdir(sessDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	goneDir := filepath.Join(tmp, "gone")
+
+	SetClient(&mockTmuxClient{sessions: []tmux.Session{{Name: "work", Path: sessDir}}})
+	ctx := context.Background()
+
+	if got := resolveTabDir(ctx, "work", sessDir, tmp); got != tmp {
+		t.Errorf("existing flag must win: got %q", got)
+	}
+	if got := resolveTabDir(ctx, "work", tmp, goneDir); got != tmp {
+		t.Errorf("expected valid hint over listing, got %q", got)
+	}
+	if got := resolveTabDir(ctx, "work", goneDir, goneDir); got != sessDir {
+		t.Errorf("expected session listing fallback, got %q", got)
+	}
+	if got := resolveTabDir(ctx, "ghost", goneDir, goneDir); got == "" || got == goneDir {
+		t.Errorf("expected cwd fallback for unknown session, got %q", got)
+	}
 }
 
 func TestOprOwnership(t *testing.T) {

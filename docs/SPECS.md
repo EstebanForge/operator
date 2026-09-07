@@ -54,6 +54,7 @@ It addresses two distinct consumers with equal priority:
 - **Decision:**
   - Use tab (`\t`) as the field delimiter for `tmux list-sessions`.
   - Target sessions with exact-match syntax in every client call: `-t =<name>` for session commands, `-t =<name>:` for pane commands (`capture-pane`, `send-keys`). Bare names fall back to tmux unambiguous-prefix matching, so `-t work` would resolve to a session named `worker`.
+  - Create tabs (windows) with `new-window -t =<session>:` (exact session, next free index) and `-P -F` with a tab-delimited format to capture the new window id, index, name, and pane path.
   - Treat a "no server running" tmux exit status as an empty session list (`[]`), not an error.
   - Format `created_at` timestamps as RFC 3339 (ISO 8601) strings parsed from epoch seconds (`#{session_created}`).
   - Guard `operator join` against non-TTY invocation with exit code `4`.
@@ -76,6 +77,7 @@ It addresses two distinct consumers with equal priority:
 | `[none]`    | None               | Global only                                            | Returns error code `4` + usage if non-TTY.                   | Boots full interactive TUI menu loop.        |
 | `ls`        | None               | `--json`                                               | Returns session list (table or JSON array).                  | Prints formatted status table.               |
 | `new`       | `[name]`           | `-d, --dir <path>`  `-c, --cmd <string>`  `--detached` | Creates session. Auto-generates 3-word bilingual name if omitted. Auto-sanitizes whitespace to `-`. Fails with exit 3 if session exists. Non-TTY requires `--detached` (exit 4 otherwise). | Prompted with default auto-generated name if `<name>` omitted or blank. Attached sessions print the detach/reattach/kill hint on return (human mode). |
+| `tab`       | `<session>`        | `-d, --dir <path>`  `-n, --name <string>`  `--json`     | Creates a window (tab) in an existing session at the next free index. Working directory: first valid candidate of `--dir`, the session's active pane path, then the operator cwd (each checked on disk). Fails exit 2 if the session is missing, exit 4 for missing args or an invalid directory. | Session picker if `<session>` omitted; guided prompts inside the TUI session submenu. |
 | `join`      | `<name>`           | None                                                   | Fails with code `4` if non-TTY or `<name>` omitted. Attaches with `-d` (or switches client if inside `$TMUX`). | Single-select list of sessions if omitted. On return prints the detach/reattach/kill hint (human mode). |
 | `peek`      | `<name>`           | `-l, --lines <int>` (default 25)  `--json`             | Reads last $N$ lines from active pane via `capture-pane`.    | Displays paginated preview with back option. |
 | `send`      | `<name> <payload>` | `--no-enter` (default false)  `--raw` (default false)  | Injects keys into session via `send-keys`. Payload is every argument after `<name>` joined with single spaces, so quoting is optional. Defaults to literal text (`-l`); sends raw tmux key names if `--raw`. | Not in TUI menu (agent/script focused).      |
@@ -121,6 +123,7 @@ JSON
 | Action   | `session` value                                                            | `details` keys                                                                                                   |
 | -------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `create` | Sanitized session name                                                      | `detached` (bool), `directory` (string), `exited` (bool, `true` only when an attached session closed normally)     |
+| `tab`    | Target session name                                                         | `window` (tmux id, e.g. `"@3"`), `index` (int), `name` (string), `directory` (string)                             |
 | `send`   | Target session name                                                         | `payload` (string), `enter` (bool), `raw` (bool)                                                                   |
 | `kill`   | Target name, or the sentinel `"all"` when `-a` kills the whole server       | `all` (bool)                                                                                                       |
 
@@ -187,7 +190,7 @@ JSON
 - **`1` (Internal / Daemon Error):** `tmux` execution failed, binary missing, or fatal OS error.
 - **`2` (Not Found / Target Missing):** Target session does not exist. Also used when an interactive picker (`join`, `peek`, `kill`) finds zero sessions.
 - **`3` (Conflict):** Session already exists on `new`, or `setup` found an `opr` entry that is not an operator symlink.
-- **`4` (Validation / Invocation Error):** Missing required argument in non-interactive mode, invocation of an interactive command in a non-TTY environment, `new` without `--detached` in non-TTY, cobra-level invocation failures (unknown flag or command), or a session name that sanitizes to empty. Names with invalid characters are sanitized silently, not rejected.
+- **`4` (Validation / Invocation Error):** Missing required argument in non-interactive mode, invocation of an interactive command in a non-TTY environment, `new` without `--detached` in non-TTY, cobra-level invocation failures (unknown flag or command), an invalid working directory on `tab`, or a session name that sanitizes to empty. Names with invalid characters are sanitized silently, not rejected.
 
 ## 6. Implementation Plan for Downstream LLM Agent
 
@@ -199,7 +202,7 @@ JSON
    - Parse `#{session_created}` (Unix epoch seconds) to RFC 3339 formatted timestamp.
    - Differentiate "no server running" output from system errors (return empty slice `[]Session` with nil error).
    - Build all session targets with the `=` exact-match prefix; bare names trigger tmux unambiguous-prefix matching. Session commands use `-t =<name>`; pane commands (`capture-pane`, `send-keys`) use `-t =<name>:`.
-   - Implement wrappers: `ListSessions()`, `NewSession()`, `Attach()`, `Kill()`, `CapturePane()`, `SendKeys()`.
+   - Implement wrappers: `ListSessions()`, `NewSession()`, `NewWindow()`, `Attach()`, `Kill()`, `CapturePane()`, `SendKeys()`.
    - Implement `$TMUX` detection in `Attach()`: use `switch-client` if inside tmux, `attach-session -d` if outside. Enforce TTY check.
    - Implement `SendKeys()`: default to literal text (`-l`), support raw keycode injection via option.
    - Add session name sanitization logic (convert spaces to `-`, strip non-alphanumeric/dash/underscore).
@@ -207,18 +210,18 @@ JSON
 ### Phase 2: CLI Engine (Cobra)
 
 1. Implement `cmd/root.go` with global `--json` flag and TTY detection.
-2. Implement subcommands (`ls`, `new`, `join`, `peek`, `kill`, `send`, `doctor`).
+2. Implement subcommands (`ls`, `new`, `tab`, `join`, `peek`, `kill`, `send`, `doctor`, `setup`, `version`).
 3. Enforce the non-interactive contract: fail fast with exit code `4` if arguments are missing or invalid, or if stdin is not a TTY for interactive commands.
 4. Ensure JSON serializer formats output with zero ANSI color tags.
 
 ### Phase 3: Interactive TUI (Huh Engine)
 
-1. Implement `cmd/tui.go` containing the main loop:
-   - Header showing active session counts.
-   - Menu: `Attach`, `New`, `Peek`, `Kill`, `Exit`.
-   - Menu description teaches the detach/exit keys (`Ctrl-b d` detaches, `exit` closes).
-   - Guard empty states (e.g., if sessions == 0, disable `Attach`/`Peek`/`Kill` or route to `New`).
-2. Integrate safety confirmation modals before executing destructive actions (`kill`).
+1. Implement `cmd/tui.go` with a session-first loop:
+   - Root level is the session list itself (label `name (N windows)`) plus `Create New Session` and `Exit`; header shows the active session count; the menu description teaches the detach/exit keys.
+   - Picking a session opens its submenu: `Attach`, `Create Tab in Session`, `Peek Session Output`, `Kill Session`, `Back`. `Back` (or Esc) returns to the root list.
+   - Guard empty states (zero sessions renders only `Create New Session` and `Exit`).
+   - Tab flow prompts working directory (default: the session's active pane path) then optional name.
+2. Integrate safety confirmation modals before executing destructive actions (`kill`). Kill-all remains CLI-only (`kill -a`); the TUI kills one session at a time.
 
 ### Phase 4: Self-Installer & Aliasing
 
@@ -242,3 +245,6 @@ JSON
 - Test attached `new` whose session closes normally: exit code 0, JSON `details.exited` is `true`.
 - Test exit hints: an attached `join` that returns prints the detach or closed hint on stderr and nothing extra on stdout.
 - Test hints stay silent under `--json` and when `$TMUX` is set (switch-client returns while the user stays attached).
+- Test `operator tab work --json` returns `action: "tab"` with `window`/`index`/`name`/`directory` details and the session window count rises by one.
+- Test exact tab targeting: `operator tab ghost` fails with exit 2; an invalid `--dir` fails with exit 4.
+- Test TUI session-first loop: root lists sessions, submenu offers Attach/Tab/Peek/Kill/Back, Esc at root exits.
