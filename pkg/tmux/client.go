@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -69,10 +70,17 @@ type Client interface {
 	NewWindow(ctx context.Context, session, name, dir string) (*WindowResult, error)
 	Attach(ctx context.Context, name string) error
 	Kill(ctx context.Context, name string, all bool) error
+	KillServer(ctx context.Context) error
+	RestartServer(ctx context.Context) (*Session, error)
+	ReloadConfig(ctx context.Context) error
 	CapturePane(ctx context.Context, name string, lines int) (string, error)
 	SendKeys(ctx context.Context, name, payload string, enter bool, raw bool) error
 	Doctor(ctx context.Context) (*DoctorResult, error)
 }
+
+// restartSessionName is the fresh detached session RestartServer leaves
+// running so the restarted server is immediately attachable.
+const restartSessionName = "main"
 
 // OSClient interacts with tmux using os/exec.
 type OSClient struct {
@@ -419,6 +427,72 @@ func (c *OSClient) Kill(ctx context.Context, name string, all bool) error {
 
 	_, err = c.run(ctx, "kill-session", "-t", sessionTarget(name))
 	return err
+}
+
+// KillServer terminates the tmux server and every session it hosts. A
+// server that is already down is a no-op, mirroring kill -a tolerance.
+func (c *OSClient) KillServer(ctx context.Context) error {
+	return c.Kill(ctx, "", true)
+}
+
+// RestartServer kills the tmux server and starts a fresh one with a single
+// detached 'main' session. tmux re-reads its configuration at server start,
+// so a restart doubles as a full config reload (at the cost of every
+// session and its running programs).
+func (c *OSClient) RestartServer(ctx context.Context) (*Session, error) {
+	if err := c.KillServer(ctx); err != nil {
+		return nil, err
+	}
+	return c.NewSession(ctx, restartSessionName, "", "", true)
+}
+
+// tmuxConfigCandidates mirrors tmux's own user-config lookup order:
+// ~/.tmux.conf first, then $XDG_CONFIG_HOME/tmux/tmux.conf (defaulting to
+// ~/.config/tmux/tmux.conf).
+func tmuxConfigCandidates() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	candidates := []string{filepath.Join(home, ".tmux.conf")}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		candidates = append(candidates, filepath.Join(xdg, "tmux", "tmux.conf"))
+	} else {
+		candidates = append(candidates, filepath.Join(home, ".config", "tmux", "tmux.conf"))
+	}
+	return candidates
+}
+
+// resolveTmuxConfigPath returns the first existing user tmux config file.
+func resolveTmuxConfigPath() (string, error) {
+	candidates := tmuxConfigCandidates()
+	for _, path := range candidates {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("no tmux config file found (looked in %s)", strings.Join(candidates, ", "))
+}
+
+// ReloadConfig re-applies the user's tmux configuration with source-file.
+// tmux reads its config only at server start, so an explicit reload is the
+// only way to apply changes without killing sessions. A server that is not
+// running has nothing to reload (the next start reads the file fresh), so
+// that case is a no-op success.
+func (c *OSClient) ReloadConfig(ctx context.Context) error {
+	path, err := resolveTmuxConfigPath()
+	if err != nil {
+		return err
+	}
+	if _, err := c.run(ctx, "source-file", path); err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "no server running") ||
+			strings.Contains(errMsg, "error connecting to") {
+			return nil
+		}
+		return fmt.Errorf("reload failed: %w", err)
+	}
+	return nil
 }
 
 // CapturePane captures lines from the active pane.

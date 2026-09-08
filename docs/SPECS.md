@@ -202,7 +202,7 @@ JSON
    - Parse `#{session_created}` (Unix epoch seconds) to RFC 3339 formatted timestamp.
    - Differentiate "no server running" output from system errors (return empty slice `[]Session` with nil error).
    - Build all session targets with the `=` exact-match prefix; bare names trigger tmux unambiguous-prefix matching. Session commands use `-t =<name>`; pane commands (`capture-pane`, `send-keys`) use `-t =<name>:`.
-   - Implement wrappers: `ListSessions()`, `NewSession()`, `NewWindow()`, `Attach()`, `Kill()`, `CapturePane()`, `SendKeys()`.
+   - Implement wrappers: `ListSessions()`, `NewSession()`, `NewWindow()`, `Attach()`, `Kill()`, `KillServer()`, `RestartServer()`, `ReloadConfig()`, `CapturePane()`, `SendKeys()`.
    - Implement `$TMUX` detection in `Attach()`: use `switch-client` if inside tmux, `attach-session -d` if outside. Enforce TTY check.
    - Implement `SendKeys()`: default to literal text (`-l`), support raw keycode injection via option.
    - Add session name sanitization logic (convert spaces to `-`, strip non-alphanumeric/dash/underscore).
@@ -217,11 +217,16 @@ JSON
 ### Phase 3: Interactive TUI (Huh Engine)
 
 1. Implement `cmd/tui.go` with a session-first loop:
-   - Root level is the session list itself (label `name (N windows)`) plus `Create New Session` and `Exit`; header shows the active session count; the menu description teaches the detach/exit keys.
+   - Root level is the session list itself (label `name (N windows)`) plus `Create New Session`, `Tmux Server Management`, and `Exit`; header shows the active session count; the menu description teaches the detach/exit keys.
    - Picking a session opens its submenu: `Attach`, `Create Tab in Session`, `Peek Session Output`, `Kill Session`, `Back`. `Back` (or Esc) returns to the root list.
-   - Guard empty states (zero sessions renders only `Create New Session` and `Exit`).
+   - Picking `Tmux Server Management` opens the server submenu: `Restart Tmux Server`, `Kill Tmux Server`, `Reload Config`, `Server Status`, `Back`. Esc returns to the root list.
+   - Guard empty states (zero sessions renders only `Create New Session`, `Tmux Server Management`, and `Exit`).
    - Tab flow prompts working directory (default: the session's active pane path) then optional name.
-2. Integrate safety confirmation modals before executing destructive actions (`kill`). Kill-all remains CLI-only (`kill -a`); the TUI kills one session at a time.
+2. Integrate safety confirmation modals before executing destructive actions (`kill`, server restart, server kill). The TUI kills one session at a time from the session submenu; server-wide operations live under `Tmux Server Management`:
+   - `Restart Tmux Server` runs `kill-server`, then creates a fresh detached `main` session so the restarted server is immediately attachable. tmux re-reads its config at server start, so a restart doubles as a full config reload (at the cost of every session). Confirmed first; returns to the refreshed root list.
+   - `Kill Tmux Server` runs `kill-server` (same as CLI `kill -a`). A server that is already down is a no-op success. Confirmed first; returns to the refreshed root list.
+   - `Reload Config` runs `source-file` on the first existing user config (`~/.tmux.conf`, then `$XDG_CONFIG_HOME/tmux/tmux.conf` or the default `~/.config/tmux/tmux.conf`). tmux reads its config only at server start, so this is the only way to apply changes without killing sessions. Non-destructive: no confirmation, stays in the submenu. A server that is not running has nothing to reload, so it is a no-op success. A missing config file reports the searched paths.
+   - `Server Status` prints the tmux version, binary path, and server state (reuses the `Doctor` check). Non-destructive: stays in the submenu.
 
 ### Phase 4: Self-Installer & Aliasing
 
@@ -248,3 +253,4 @@ JSON
 - Test `operator tab work --json` returns `action: "tab"` with `window`/`index`/`name`/`directory` details and the session window count rises by one.
 - Test exact tab targeting: `operator tab ghost` fails with exit 2; an invalid `--dir` fails with exit 4.
 - Test TUI session-first loop: root lists sessions, submenu offers Attach/Tab/Peek/Kill/Back, Esc at root exits.
+- Test TUI server management: root offers `Tmux Server Management`; submenu offers Restart/Kill/Reload/Status/Back; restart and kill ask for confirmation and return to the refreshed root list; a declined confirm leaves the server untouched; reload sources the user config without touching sessions and stays in the submenu; server ops never touch a live developer server in tests (fake tmux binary).

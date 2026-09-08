@@ -458,3 +458,243 @@ func TestRunTUI_KillSession_EscLevels(t *testing.T) {
 		}
 	})
 }
+
+// selectServerInRoot navigates the root select to "Tmux Server Management".
+// It sits one slot above Exit: sessions..., Create New Session, Server, Exit.
+func selectServerInRoot(f huh.Field, sessionCount int) {
+	sel := f.(*huh.Select[string])
+	sel.Init()
+	for range sessionCount + 1 {
+		sel.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
+}
+
+// selectServerAction navigates the server submenu to the nth option.
+func selectServerAction(f huh.Field, index int) {
+	sel := f.(*huh.Select[string])
+	sel.Init()
+	for range index {
+		sel.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	sel.Update(tea.KeyMsg{Type: tea.KeyEnter})
+}
+
+func TestRunTUI_ServerMenu_EscBack(t *testing.T) {
+	origRunField := runField
+	defer func() { runField = origRunField }()
+
+	step := 0
+	runField = func(_ context.Context, f huh.Field) error {
+		f.WithKeyMap(huh.NewDefaultKeyMap())
+		step++
+		switch step {
+		case 1:
+			// Root: select "Tmux Server Management".
+			selectServerInRoot(f, 1)
+			return nil
+		case 2:
+			// Server submenu: ESC = Back to root.
+			return huh.ErrUserAborted
+		case 3:
+			// Root: ESC exits.
+			return huh.ErrUserAborted
+		default:
+			t.Fatalf("unexpected step %d", step)
+			return nil
+		}
+	}
+
+	mock := &mockTmuxClient{sessions: []tmux.Session{{Name: "worker1", Windows: 1}}}
+	if err := RunTUI(t.Context(), mock); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if step != 3 {
+		t.Fatalf("expected 3 steps, got %d", step)
+	}
+}
+
+func TestRunTUI_ServerMenu_KillDeclineStays(t *testing.T) {
+	origRunField := runField
+	defer func() { runField = origRunField }()
+
+	step := 0
+	runField = func(_ context.Context, f huh.Field) error {
+		f.WithKeyMap(huh.NewDefaultKeyMap())
+		step++
+		switch step {
+		case 1:
+			selectServerInRoot(f, 1)
+			return nil
+		case 2:
+			// Server submenu: select "Kill Tmux Server".
+			selectServerAction(f, 1)
+			return nil
+		case 3:
+			// Kill confirm: choose "No".
+			confirm := f.(*huh.Confirm)
+			confirm.Init()
+			confirm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+			return nil
+		case 4:
+			// Server submenu: ESC = Back to root.
+			return huh.ErrUserAborted
+		case 5:
+			// Root: ESC exits.
+			return huh.ErrUserAborted
+		default:
+			t.Fatalf("unexpected step %d", step)
+			return nil
+		}
+	}
+
+	mock := &mockTmuxClient{sessions: []tmux.Session{{Name: "worker1", Windows: 1}}}
+	if err := RunTUI(t.Context(), mock); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if step != 5 {
+		t.Fatalf("expected 5 steps, got %d", step)
+	}
+	if mock.killedServer {
+		t.Fatal("expected server to survive a declined kill")
+	}
+}
+
+func TestRunTUI_ServerMenu_KillConfirmed(t *testing.T) {
+	origRunField := runField
+	defer func() { runField = origRunField }()
+
+	capture := captureTUIStdout(t)
+
+	step := 0
+	runField = func(_ context.Context, f huh.Field) error {
+		f.WithKeyMap(huh.NewDefaultKeyMap())
+		step++
+		switch step {
+		case 1:
+			selectServerInRoot(f, 1)
+			return nil
+		case 2:
+			selectServerAction(f, 1) // "Kill Tmux Server"
+			return nil
+		case 3:
+			// Kill confirm: choose "Yes".
+			confirm := f.(*huh.Confirm)
+			confirm.Init()
+			confirm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+			return nil
+		case 4:
+			// Back at the refreshed root: ESC exits.
+			return huh.ErrUserAborted
+		default:
+			t.Fatalf("unexpected step %d", step)
+			return nil
+		}
+	}
+
+	mock := &mockTmuxClient{sessions: []tmux.Session{{Name: "worker1", Windows: 1}}}
+	if err := RunTUI(t.Context(), mock); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if step != 4 {
+		t.Fatalf("expected 4 steps, got %d", step)
+	}
+	if !mock.killedServer {
+		t.Fatal("expected KillServer to run after confirmation")
+	}
+	if out := capture(); !bytes.Contains([]byte(out), []byte("Tmux server killed")) {
+		t.Errorf("expected kill confirmation output, got: %q", out)
+	}
+}
+
+func TestRunTUI_ServerMenu_RestartConfirmed(t *testing.T) {
+	origRunField := runField
+	defer func() { runField = origRunField }()
+
+	capture := captureTUIStdout(t)
+
+	step := 0
+	runField = func(_ context.Context, f huh.Field) error {
+		f.WithKeyMap(huh.NewDefaultKeyMap())
+		step++
+		switch step {
+		case 1:
+			selectServerInRoot(f, 1)
+			return nil
+		case 2:
+			// Server submenu: "Restart Tmux Server" is first.
+			selectServerAction(f, 0)
+			return nil
+		case 3:
+			// Restart confirm: choose "Yes".
+			confirm := f.(*huh.Confirm)
+			confirm.Init()
+			confirm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+			return nil
+		case 4:
+			// Back at the refreshed root: ESC exits.
+			return huh.ErrUserAborted
+		default:
+			t.Fatalf("unexpected step %d", step)
+			return nil
+		}
+	}
+
+	mock := &mockTmuxClient{sessions: []tmux.Session{{Name: "worker1", Windows: 1}}}
+	if err := RunTUI(t.Context(), mock); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if step != 4 {
+		t.Fatalf("expected 4 steps, got %d", step)
+	}
+	if !mock.restartedServer {
+		t.Fatal("expected RestartServer to run after confirmation")
+	}
+	if out := capture(); !bytes.Contains([]byte(out), []byte("Server restarted")) {
+		t.Errorf("expected restart confirmation output, got: %q", out)
+	}
+}
+
+func TestRunTUI_ServerMenu_ReloadStays(t *testing.T) {
+	origRunField := runField
+	defer func() { runField = origRunField }()
+
+	capture := captureTUIStdout(t)
+
+	step := 0
+	runField = func(_ context.Context, f huh.Field) error {
+		f.WithKeyMap(huh.NewDefaultKeyMap())
+		step++
+		switch step {
+		case 1:
+			selectServerInRoot(f, 1)
+			return nil
+		case 2:
+			selectServerAction(f, 2) // "Reload Config"
+			return nil
+		case 3:
+			// Reload is non-destructive: stay in the submenu. ESC = Back.
+			return huh.ErrUserAborted
+		case 4:
+			// Root: ESC exits.
+			return huh.ErrUserAborted
+		default:
+			t.Fatalf("unexpected step %d", step)
+			return nil
+		}
+	}
+
+	mock := &mockTmuxClient{sessions: []tmux.Session{{Name: "worker1", Windows: 1}}}
+	if err := RunTUI(t.Context(), mock); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if step != 4 {
+		t.Fatalf("expected 4 steps, got %d", step)
+	}
+	if !mock.reloadedConfig {
+		t.Fatal("expected ReloadConfig to run without confirmation")
+	}
+	if out := capture(); !bytes.Contains([]byte(out), []byte("Tmux config reloaded")) {
+		t.Errorf("expected reload output, got: %q", out)
+	}
+}

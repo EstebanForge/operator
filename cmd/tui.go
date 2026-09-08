@@ -37,8 +37,9 @@ const tuiMenuHint = "Inside tmux: Ctrl-b d detaches, exit closes."
 
 // Root-level sentinel values for the session-first menu.
 const (
-	rootNew  = "__new__"
-	rootExit = "__exit__"
+	rootNew    = "__new__"
+	rootServer = "__server__"
+	rootExit   = "__exit__"
 )
 
 // RunTUI launches the interactive menu loop. The root level is the session
@@ -60,6 +61,8 @@ func RunTUI(ctx context.Context, c tmux.Client) error {
 			return nil
 		case rootNew:
 			tuiNewSession(ctx, c)
+		case rootServer:
+			tuiServerMenu(ctx, c)
 		default:
 			tuiSessionMenu(ctx, c, chosen)
 		}
@@ -69,12 +72,13 @@ func RunTUI(ctx context.Context, c tmux.Client) error {
 // selectRoot renders the root menu: one entry per session, plus global
 // commands. Sessions carry their window count in the label.
 func selectRoot(ctx context.Context, sessions []tmux.Session) (string, error) {
-	opts := make([]huh.Option[string], 0, len(sessions)+2)
+	opts := make([]huh.Option[string], 0, len(sessions)+3)
 	for _, s := range sessions {
 		opts = append(opts, huh.NewOption(fmt.Sprintf("%s (%d windows)", s.Name, s.Windows), s.Name))
 	}
 	opts = append(opts,
 		huh.NewOption("Create New Session", rootNew),
+		huh.NewOption("Tmux Server Management", rootServer),
 		huh.NewOption("Exit", rootExit),
 	)
 
@@ -90,6 +94,87 @@ func selectRoot(ctx context.Context, sessions []tmux.Session) (string, error) {
 		Options(opts...).
 		Value(&chosen))
 	return chosen, err
+}
+
+// confirmServerAction asks the user to approve a server-wide action. Esc
+// or a declined prompt cancels.
+func confirmServerAction(ctx context.Context, title string) bool {
+	var confirm bool
+	err := runField(ctx, huh.NewConfirm().Title(title).Value(&confirm))
+	return err == nil && confirm
+}
+
+// tuiServerMenu shows server-level maintenance actions. Restart and kill
+// end every session (and the programs running inside them), so both ask
+// for confirmation and return to the root list afterward: the session
+// state changed. Reload re-applies the tmux config without touching
+// sessions; Status reports the tmux version and server state. Esc or Back
+// returns to the root session list.
+func tuiServerMenu(ctx context.Context, c tmux.Client) {
+	for {
+		var action string
+		err := runField(ctx, huh.NewSelect[string]().
+			Title("Tmux Server Management").
+			Description("Server actions affect every session at once.").
+			Options(
+				huh.NewOption("Restart Tmux Server", "restart"),
+				huh.NewOption("Kill Tmux Server", "kill"),
+				huh.NewOption("Reload Config", "reload"),
+				huh.NewOption("Server Status", "status"),
+				huh.NewOption("Back", "back"),
+			).
+			Value(&action))
+		if err != nil {
+			return // Esc = Back
+		}
+
+		switch action {
+		case "back":
+			return
+
+		case "restart":
+			if !confirmServerAction(ctx, "Restart the tmux server? Every session and its programs end. A fresh 'main' session starts.") {
+				continue
+			}
+			sess, err := c.RestartServer(ctx)
+			if err != nil {
+				fmt.Printf("Restart failed: %s\n", err)
+				continue
+			}
+			fmt.Printf("Server restarted. Fresh session '%s' created.\n", sess.Name)
+			return // session list changed: refresh the root list
+
+		case "kill":
+			if !confirmServerAction(ctx, "Kill the tmux server? Every session and its programs end.") {
+				continue
+			}
+			if err := c.KillServer(ctx); err != nil {
+				fmt.Printf("Kill failed: %s\n", err)
+				continue
+			}
+			fmt.Println("Tmux server killed.")
+			return // session list changed: refresh the root list
+
+		case "reload":
+			if err := c.ReloadConfig(ctx); err != nil {
+				fmt.Printf("Reload failed: %s\n", err)
+				continue
+			}
+			fmt.Println("Tmux config reloaded.")
+
+		case "status":
+			doc, err := c.Doctor(ctx)
+			if err != nil {
+				fmt.Printf("Status failed: %s\n", err)
+				continue
+			}
+			if !doc.TmuxInstalled {
+				fmt.Println("tmux is not installed.")
+				continue
+			}
+			fmt.Printf("tmux: %s (%s)\nServer running: %v\n", doc.TmuxVersion, doc.TmuxPath, doc.ServerRunning)
+		}
+	}
 }
 
 // tuiSessionMenu shows the action submenu for one session. Session state is

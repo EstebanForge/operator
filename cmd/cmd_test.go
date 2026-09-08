@@ -16,21 +16,27 @@ import (
 )
 
 type mockTmuxClient struct {
-	sessions  []tmux.Session
-	listErr   error
-	hasErr    error
-	newErr    error
-	newWinErr error
-	killErr   error
-	peekErr   error
-	sendErr   error
-	docRes    *tmux.DoctorResult
-	docErr    error
+	sessions   []tmux.Session
+	listErr    error
+	hasErr     error
+	newErr     error
+	newWinErr  error
+	killErr    error
+	peekErr    error
+	sendErr    error
+	docRes     *tmux.DoctorResult
+	docErr     error
+	killSrvErr error
+	restartErr error
+	reloadErr  error
 
 	lastSentPayload string
 	lastSentEnter   bool
 	lastSentRaw     bool
 	lastWindow      tmux.WindowResult
+	killedServer    bool
+	restartedServer bool
+	reloadedConfig  bool
 }
 
 func (m *mockTmuxClient) ListSessions(_ context.Context) ([]tmux.Session, error) {
@@ -98,6 +104,33 @@ func (m *mockTmuxClient) Kill(_ context.Context, name string, all bool) error {
 		}
 	}
 	return tmux.ErrNotFound
+}
+
+func (m *mockTmuxClient) KillServer(_ context.Context) error {
+	if m.killSrvErr != nil {
+		return m.killSrvErr
+	}
+	m.killedServer = true
+	m.sessions = nil
+	return nil
+}
+
+func (m *mockTmuxClient) RestartServer(_ context.Context) (*tmux.Session, error) {
+	if m.restartErr != nil {
+		return nil, m.restartErr
+	}
+	m.restartedServer = true
+	s := &tmux.Session{Name: "main", Windows: 1, CreatedAt: "2026-09-05T19:30:00Z"}
+	m.sessions = []tmux.Session{*s}
+	return s, nil
+}
+
+func (m *mockTmuxClient) ReloadConfig(_ context.Context) error {
+	if m.reloadErr != nil {
+		return m.reloadErr
+	}
+	m.reloadedConfig = true
+	return nil
 }
 
 func (m *mockTmuxClient) CapturePane(_ context.Context, _ string, _ int) (string, error) {
