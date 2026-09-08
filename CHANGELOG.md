@@ -4,6 +4,34 @@ All notable changes to `operator` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-09-07
+
+<!-- RELEASE:START 0.2.0 -->
+
+Adds a Tmux Server Management submenu to the interactive TUI. Restart and
+kill-server are confirm-gated; the config reload applies changes without
+touching sessions (tmux reads its config only at server start, so a reload
+is the only way around a restart).
+
+### Added
+
+- `Tmux Server Management` entry in the TUI root menu, with a submenu:
+  Restart Tmux Server, Kill Tmux Server, Reload Config, Server Status, and
+  Back.
+- `Restart Tmux Server`: kills the server and starts a fresh one with a
+  detached `main` session, so the restarted server is attachable right
+  away. A restart also reloads the tmux config.
+- `Kill Tmux Server`: the TUI counterpart of `kill -a`. A server that is
+  already down is a no-op.
+- `Reload Config`: runs `source-file` on the first existing user config
+  (`~/.tmux.conf`, then the XDG location). Non-destructive; a server that
+  is not running is a no-op, and a missing config reports the searched
+  paths.
+- `Server Status`: tmux version, binary path, and server state (reuses
+  the `doctor` check).
+
+<!-- RELEASE:END 0.2.0 -->
+
 ## [0.1.1] - 2026-09-07
 
 <!-- RELEASE:START 0.1.1 -->

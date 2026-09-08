@@ -7,5 +7,5 @@ const (
 	// AliasName is the shorthand alias for operator.
 	AliasName = "opr"
 	// Version is the current semantic release version of operator.
-	Version = "0.1.1"
+	Version = "0.2.0"
 )
