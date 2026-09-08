@@ -82,7 +82,7 @@ jobs:
       - name: Build linux (amd64 + arm64, pure Go)
         run: make cross-compile
       - name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: linux
           path: |
@@ -112,7 +112,7 @@ jobs:
           lipo -create -output dist/operator dist/operator-darwin-arm64 dist/operator-darwin-amd64
           lipo -info dist/operator
       - name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: darwin
           path: |
@@ -130,7 +130,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Download all artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
